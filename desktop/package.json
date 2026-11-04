@@ -4,9 +4,14 @@
   "description": "Electron desktop app for Apple Silicon system metrics",
   "main": "electron/main.js",
   "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "check": "node --check electron/main.js && node --check electron/preload.js"
   },
   "devDependencies": {
     "electron": "^34.5.8"
