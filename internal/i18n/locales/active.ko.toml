@@ -32,6 +32,13 @@ TUI_ECPUUsage = "E-CPU 사용량"
 TUI_PCPUUsage = "P-CPU 사용량"
 TUI_GPUUsage = "GPU 사용량"
 TUI_MemoryUsage = "메모리 사용량"
+TUI_MemoryPressure = "메모리 압력"
+TUI_MemoryPressureHistory = "메모리 압력 기록"
+Metrics_MemPressureGauge = "압력: %s (%.0f)"
+Metrics_MemPressurePanel = "상태: %s\n수준: %d\n대략: %.0f\n압축: %.1f GB"
+Metrics_MemPressureHistoryDetail = "압력: %s (%.0f)"
+Info_MemoryPressure = "메모리 압력"
+Info_MemoryPressureValue = "%s (수준 %d, 대략 %.0f)"
 TUI_ANEUsage = "ANE 사용량"
 TUI_PowerUsage = "전력 사용량"
 TUI_NetworkDisk = "네트워크 및 디스크"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "메모리"
 Process_TIME = "시간"
 Process_CMD = "명령어"
-
+Port_PORT = "포트"
+Port_PROTO = "프로토"
+Port_BIND = "바인드"
+Port_PID = "PID"
+Port_USER = "사용자"
+Port_ESTAB = "연결"
+Port_CMD = "명령"
+TUI_PortsListFull = "포트 (↑/↓ 스크롤, / 검색, e 외부, f 고정, F9 종료)"
+TUI_PortsListFrozen = " 포트 [고정됨] (f 로 재개) "
+TUI_PortsListSearch = " 포트 검색: %s_ (Esc 로 지우기) "
+TUI_PortsListKill = " 포트 - 종료 확인 (PID %d) "
+TUI_PortsListExternal = " 포트 [외부만] (e 전체, / 검색, F9 종료) "
 TUI_ProcessListFull = "프로세스 목록 (↑/↓ 이동, / 검색, f 정지, F9 종료)"
 TUI_ProcessListFrozen = " 프로세스 목록 [정지됨] (f로 재개) "
 TUI_ProcessListSearch = " 검색: %s_ (Esc로 취소) "
@@ -263,6 +281,10 @@ CLI_HelpText = """
       --overlay-sections  표시할 섹션을 쉼표로 구분해 지정 (예: cpu,gpu,memory,power)
       --overlay-opacity   오버레이 창 투명도, 0.15-1.0 (기본값: 0.88)
       --fan-control       대화형 팬 제어 활성화 (SMC에 기록)
+      --fan-set <value>   팬 속도를 설정하고 종료: RPM, 퍼센트 (60%), min, max 또는 auto (sudo 필요)
+      --fan-id <n>        --fan-set을 단일 팬 ID에 적용 (기본값: 모든 팬)
+      --fan-auto          팬 자동 제어를 복원하고 종료 (sudo 필요)
+      --fan-status        팬 상태를 JSON으로 출력하고 종료
       --dump-temps        진단: 모든 원시 SMC 온도 키를 출력하고 종료
       --dump-debug        진단: IOReport/HID/SMC/NVMe 디버그 정보를 출력하고 종료
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (평균 %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "읽기 %s/s 쓰기 %s/s"
 Info_DRAMBWValue = "읽기 %.1f / 쓰기 %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s 여유)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ 팬 제어 활성화됨](fg:red,mod:bold)  [+/-](fg:%s
 Fan_ReadOnly = "[읽기 전용](fg:%s)  쓰기를 허용하려면 --fan-control 사용  |  [l](fg:%s,mod:bold) 레이아웃  [F](fg:%s,mod:bold) 팬 보기 종료"
 Fan_NeedsRoot = "[⚠ 팬 제어에는 root 권한이 필요합니다 — 재실행: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ 마지막 쓰기가 적용되지 않음 (OS 거부)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "오류: 팬 제어 쓰기에는 root가 필요합니다 — 실행: sudo mactop %s"
+FanCLI_WriteFailed = "오류: 팬 제어 쓰기 실패: %v"
+FanCLI_InvalidValue = "오류: 잘못된 --fan-set 값 '%s' — RPM 숫자, 60%% 같은 퍼센트, min, max 또는 auto를 사용하세요"
+FanCLI_UnknownFan = "오류: ID %d인 팬이 없습니다 (감지된 팬: %d개)"
+FanCLI_NoMaxRPM = "오류: 팬이 최대 RPM을 보고하지 않습니다 — 퍼센트/max 대신 절대 RPM 값을 사용하세요"
+FanCLI_FanPinned = "팬 %d을(를) %d RPM으로 고정했습니다 (수동 모드)"
+FanCLI_AutoRestored = "모든 팬이 자동 제어로 복원되었습니다"
+FanCLI_ManualWarning = "⚠ mactop 종료 후에도 팬은 수동 모드로 유지됩니다 — 자동 제어 복원: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "경고: SMC가 쓰기를 수락했지만 팬 상태가 변경되지 않았습니다 — OS가 재정의했을 수 있습니다"
 
 Metrics_PowerSparklineGroup = "%.2f W 총합 (최대: %.2f W)"
 Metrics_PowerSparklineTitle = "평균 %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "충전 중"
 Info_BatteryDischarging = "배터리 사용"
 Info_BatteryAC = "AC 전원"
+Info_PowerSupply = "전원 공급 장치"
 
 TUI_MemoryBandwidthHistory = "메모리 대역폭 기록"
 Metrics_MemBWHistoryDetail = "DRAM 대역폭: %.1f GB/s"

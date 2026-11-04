@@ -32,6 +32,13 @@ TUI_ECPUUsage = "Загрузка E-CPU"
 TUI_PCPUUsage = "Загрузка P-CPU"
 TUI_GPUUsage = "Загрузка GPU"
 TUI_MemoryUsage = "Использование памяти"
+TUI_MemoryPressure = "Давление памяти"
+TUI_MemoryPressureHistory = "История давления памяти"
+Metrics_MemPressureGauge = "Давление: %s (%.0f)"
+Metrics_MemPressurePanel = "Состояние: %s\nУровень: %d\nПриближ.: %.0f\nСжато: %.1f GB"
+Metrics_MemPressureHistoryDetail = "Давление: %s (%.0f)"
+Info_MemoryPressure = "Давл. пам."
+Info_MemoryPressureValue = "%s (уровень %d, прибл. %.0f)"
 TUI_ANEUsage = "Загрузка ANE"
 TUI_PowerUsage = "Энергопотребление"
 TUI_NetworkDisk = "Сеть и Диск"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "ПАМ"
 Process_TIME = "ВРЕМЯ"
 Process_CMD = "КОМАНДА"
-
+Port_PORT = "ПОРТ"
+Port_PROTO = "ПРОТО"
+Port_BIND = "АДРЕС"
+Port_PID = "PID"
+Port_USER = "ПОЛЬЗ"
+Port_ESTAB = "УСТАН"
+Port_CMD = "КОМ"
+TUI_PortsListFull = "Порты (↑/↓ прокрутка, / поиск, e внешние, f заморозка, F9 убить)"
+TUI_PortsListFrozen = " Порты [ЗАМОРОЖЕНЫ] (f для продолжения) "
+TUI_PortsListSearch = " Поиск портов: %s_ (Esc для очистки) "
+TUI_PortsListKill = " Порты - ПОДТВЕРДИТЬ ЗАВЕРШЕНИЕ (PID %d) "
+TUI_PortsListExternal = " Порты [ТОЛЬКО ВНЕШНИЕ] (e все, / поиск, F9 убить) "
 TUI_ProcessListFull = "Список процессов (↑/↓ прокрутка, / поиск, f заморозить, F9 завершить)"
 TUI_ProcessListFrozen = " Список процессов [ЗАМОРОЖЕН] (f для продолжения) "
 TUI_ProcessListSearch = " Поиск: %s_ (Esc для очистки) "
@@ -263,6 +281,10 @@ CLI_HelpText = """
       --overlay-sections  Видимые секции через запятую (напр. cpu,gpu,memory,power)
       --overlay-opacity   Прозрачность окна overlay, 0.15-1.0 (по умолчанию: 0.88)
       --fan-control       Включить интерактивное управление вентиляторами (запись в SMC)
+      --fan-set <value>   Задать скорость вентиляторов и выйти: RPM, процент (60%), min, max или auto (требуется sudo)
+      --fan-id <n>        Применить --fan-set к одному ID вентилятора (по умолчанию: все)
+      --fan-auto          Восстановить автоматическое управление вентиляторами и выйти (требуется sudo)
+      --fan-status        Вывести состояние вентиляторов в JSON и выйти
       --dump-temps        Диагностика: показать все ключи температуры SMC и выйти
       --dump-debug        Диагностика: показать отладочную информацию IOReport/HID/SMC/NVMe и выйти
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (Средн %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "Ч %s/s З %s/s"
 Info_DRAMBWValue = "Ч %.1f / З %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s свободно)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ УПРАВЛЕНИЕ ВЕНТИЛЯТОРАМИ АКТ
 Fan_ReadOnly = "[Только чтение](fg:%s)  Используйте --fan-control для записи  |  [l](fg:%s,mod:bold) Макет  [F](fg:%s,mod:bold) Закрыть вентиляторы"
 Fan_NeedsRoot = "[⚠ Управление вентиляторами требует root — перезапустите: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ последняя запись не подействовала (отклонена ОС)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "Ошибка: запись управления вентиляторами требует root — выполните: sudo mactop %s"
+FanCLI_WriteFailed = "Ошибка: сбой записи управления вентиляторами: %v"
+FanCLI_InvalidValue = "Ошибка: недопустимое значение --fan-set '%s' — используйте число RPM, процент вида 60%%, min, max или auto"
+FanCLI_UnknownFan = "Ошибка: нет вентилятора с ID %d (обнаружено вентиляторов: %d)"
+FanCLI_NoMaxRPM = "Ошибка: вентилятор не сообщает максимальные RPM — используйте абсолютное значение RPM вместо процента/max"
+FanCLI_FanPinned = "Вентилятор %d зафиксирован на %d RPM (ручной режим)"
+FanCLI_AutoRestored = "Все вентиляторы возвращены в автоматический режим"
+FanCLI_ManualWarning = "⚠ После выхода mactop вентиляторы остаются в ручном режиме — восстановите автоматическое управление: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "Предупреждение: SMC принял запись, но состояние вентилятора не изменилось — ОС могла её переопределить"
 
 Metrics_PowerSparklineGroup = "%.2f W Всего (Макс: %.2f W)"
 Metrics_PowerSparklineTitle = "Средн %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "зарядка"
 Info_BatteryDischarging = "от батареи"
 Info_BatteryAC = "от сети"
+Info_PowerSupply = "Блок питания"
 
 TUI_MemoryBandwidthHistory = "История пропускной способности памяти"
 Metrics_MemBWHistoryDetail = "Пропускная способность DRAM: %.1f ГБ/с"

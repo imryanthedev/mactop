@@ -32,6 +32,13 @@ TUI_ECPUUsage = "Użycie E-CPU"
 TUI_PCPUUsage = "Użycie P-CPU"
 TUI_GPUUsage = "Użycie GPU"
 TUI_MemoryUsage = "Użycie pamięci"
+TUI_MemoryPressure = "Ciśnienie pamięci"
+TUI_MemoryPressureHistory = "Historia ciśnienia pamięci"
+Metrics_MemPressureGauge = "Ciśnienie: %s (%.0f)"
+Metrics_MemPressurePanel = "Stan: %s\nPoziom: %d\nPrzybliż.: %.0f\nSkompresowana: %.1f GB"
+Metrics_MemPressureHistoryDetail = "Ciśnienie: %s (%.0f)"
+Info_MemoryPressure = "Ciśn. pam."
+Info_MemoryPressureValue = "%s (poziom %d, ok. %.0f)"
 TUI_ANEUsage = "Użycie ANE"
 TUI_PowerUsage = "Zużycie energii"
 TUI_NetworkDisk = "Sieć i dysk"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "PAM"
 Process_TIME = "CZAS"
 Process_CMD = "POLECENIE"
-
+Port_PORT = "PORT"
+Port_PROTO = "PROTO"
+Port_BIND = "BIND"
+Port_PID = "PID"
+Port_USER = "UŻYTK"
+Port_ESTAB = "USTAL"
+Port_CMD = "CMD"
+TUI_PortsListFull = "Porty (↑/↓ przewijanie, / szukaj, e zewnętrzne, f zamroź, F9 zabij)"
+TUI_PortsListFrozen = " Porty [ZAMROŻONE] (f aby wznowić) "
+TUI_PortsListSearch = " Szukaj portów: %s_ (Esc aby wyczyścić) "
+TUI_PortsListKill = " Porty - POTWIERDŹ ZABICIE (PID %d) "
+TUI_PortsListExternal = " Porty [TYLKO ZEWNĘTRZNE] (e wszystkie, / szukaj, F9 zabij) "
 TUI_ProcessListFull = "Lista procesów (↑/↓ przewiń, / szukaj, f zamroź, F9 zakończ)"
 TUI_ProcessListFrozen = " Lista procesów [ZAMROŻONA] (f aby wznowić) "
 TUI_ProcessListSearch = " Szukaj: %s_ (Esc aby wyczyścić) "
@@ -263,6 +281,10 @@ Opcje:
       --overlay-sections  Widoczne sekcje oddzielone przecinkami (np. cpu,gpu,memory,power)
       --overlay-opacity   Przezroczystość okna overlay, 0.15-1.0 (domyślnie: 0.88)
       --fan-control       Włącz interaktywne sterowanie wentylatorami (zapis do SMC)
+      --fan-set <value>   Ustaw prędkość wentylatorów i zakończ: RPM, procent (60%), min, max lub auto (wymaga sudo)
+      --fan-id <n>        Zastosuj --fan-set do jednego ID wentylatora (domyślnie: wszystkie)
+      --fan-auto          Przywróć automatyczne sterowanie wentylatorami i zakończ (wymaga sudo)
+      --fan-status        Wypisz stan wentylatorów jako JSON i zakończ
       --dump-temps        Diagnostyka: pokaż wszystkie klucze temperatury SMC i zakończ
       --dump-debug        Diagnostyka: pokaż informacje debugowania IOReport/HID/SMC/NVMe i zakończ
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (Średn %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "O %s/s Z %s/s"
 Info_DRAMBWValue = "O %.1f / Z %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s wolne)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ STEROWANIE WENTYLATORAMI AKTYWNE](fg:red,mod:bold)  [+
 Fan_ReadOnly = "[Tylko odczyt](fg:%s)  Użyj --fan-control aby włączyć zapis  |  [l](fg:%s,mod:bold) Układ  [F](fg:%s,mod:bold) Zamknij widok wentylatora"
 Fan_NeedsRoot = "[⚠ Sterowanie wentylatorami wymaga roota — uruchom ponownie: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ ostatni zapis nie przyniósł efektu (odrzucony przez system)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "Błąd: zapisy sterowania wentylatorami wymagają roota — uruchom: sudo mactop %s"
+FanCLI_WriteFailed = "Błąd: zapis sterowania wentylatorami nie powiódł się: %v"
+FanCLI_InvalidValue = "Błąd: nieprawidłowa wartość --fan-set '%s' — użyj liczby RPM, procentu jak 60%%, min, max lub auto"
+FanCLI_UnknownFan = "Błąd: brak wentylatora o ID %d (wykryto %d wentylatorów)"
+FanCLI_NoMaxRPM = "Błąd: wentylator nie zgłasza maksymalnych RPM — użyj bezwzględnej wartości RPM zamiast procentu/max"
+FanCLI_FanPinned = "Wentylator %d ustawiony na %d RPM (tryb ręczny)"
+FanCLI_AutoRestored = "Wszystkie wentylatory przywrócone do sterowania automatycznego"
+FanCLI_ManualWarning = "⚠ Wentylatory pozostają w trybie ręcznym po zamknięciu mactop — przywróć sterowanie automatyczne: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "Ostrzeżenie: SMC zaakceptował zapis, ale stan wentylatora się nie zmienił — system mógł go nadpisać"
 
 Metrics_PowerSparklineGroup = "%.2f W Razem (Maks: %.2f W)"
 Metrics_PowerSparklineTitle = "Średn %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "ładowanie"
 Info_BatteryDischarging = "na baterii"
 Info_BatteryAC = "zasilanie sieciowe"
+Info_PowerSupply = "Zasilacz"
 
 TUI_MemoryBandwidthHistory = "Historia przepustowości pamięci"
 Metrics_MemBWHistoryDetail = "Przepustowość DRAM: %.1f GB/s"

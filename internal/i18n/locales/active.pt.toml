@@ -32,6 +32,13 @@ TUI_ECPUUsage = "Uso E-CPU"
 TUI_PCPUUsage = "Uso P-CPU"
 TUI_GPUUsage = "Uso de GPU"
 TUI_MemoryUsage = "Uso de Memória"
+TUI_MemoryPressure = "Pressão de memória"
+TUI_MemoryPressureHistory = "Histórico de pressão de memória"
+Metrics_MemPressureGauge = "Pressão: %s (%.0f)"
+Metrics_MemPressurePanel = "Estado: %s\nNível: %d\nAprox.: %.0f\nComprimida: %.1f GB"
+Metrics_MemPressureHistoryDetail = "Pressão: %s (%.0f)"
+Info_MemoryPressure = "Pressão mem."
+Info_MemoryPressureValue = "%s (nível %d, aprox. %.0f)"
 TUI_ANEUsage = "Uso de ANE"
 TUI_PowerUsage = "Uso de Energia"
 TUI_NetworkDisk = "Rede e Disco"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "MEM"
 Process_TIME = "TEMPO"
 Process_CMD = "CMD"
-
+Port_PORT = "PORTA"
+Port_PROTO = "PROTO"
+Port_BIND = "BIND"
+Port_PID = "PID"
+Port_USER = "USUÁR"
+Port_ESTAB = "ESTAB"
+Port_CMD = "CMD"
+TUI_PortsListFull = "Portas (↑/↓ rolar, / buscar, e externas, f congelar, F9 matar)"
+TUI_PortsListFrozen = " Portas [CONGELADAS] (f para retomar) "
+TUI_PortsListSearch = " Buscar portas: %s_ (Esc para limpar) "
+TUI_PortsListKill = " Portas - CONFIRMAR MATAR (PID %d) "
+TUI_PortsListExternal = " Portas [SÓ EXTERNAS] (e todas, / buscar, F9 matar) "
 TUI_ProcessListFull = "Lista de Processos (↑/↓ rolar, / buscar, f congelar, F9 matar)"
 TUI_ProcessListFrozen = " Lista de Processos [CONGELADA] (f p/ resumir) "
 TUI_ProcessListSearch = " Buscar: %s_ (Esc p/ limpar) "
@@ -262,6 +280,10 @@ Opções:
       --overlay-sections  Secções visíveis separadas por vírgulas (ex.: cpu,gpu,memory,power)
       --overlay-opacity   Opacidade da janela overlay, 0.15-1.0 (predefinição: 0.88)
       --fan-control       Ativar controlo interativo das ventoinhas (escreve no SMC)
+      --fan-set <value>   Definir a velocidade das ventoinhas e sair: RPM, porcentagem (60%), min, max ou auto (requer sudo)
+      --fan-id <n>        Aplicar --fan-set a um único ID de ventoinha (padrão: todas)
+      --fan-auto          Restaurar o controle automático das ventoinhas e sair (requer sudo)
+      --fan-status        Imprimir o estado das ventoinhas em JSON e sair
       --dump-temps        Diagnóstico: despejar todas as chaves brutas de temperatura do SMC e sair
       --dump-debug        Diagnóstico: despejar informação de debug IOReport/HID/SMC/NVMe e sair
 
@@ -299,7 +321,7 @@ Info_PowerValue = "%.2f W (Média %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "L %s/s E %s/s"
 Info_DRAMBWValue = "L %.1f / E %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s livres)"
 
@@ -311,6 +333,15 @@ Fan_ControlActive = "[⚠ CONTROLO DE VENTOINHAS ATIVO](fg:red,mod:bold)  [+/-](
 Fan_ReadOnly = "[Só leitura](fg:%s)  Use --fan-control para permitir escrita  |  [l](fg:%s,mod:bold) Layout  [F](fg:%s,mod:bold) Sair da vista das ventoinhas"
 Fan_NeedsRoot = "[⚠ O controlo de ventoinhas requer root — reinicie com: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ a última escrita não teve efeito (rejeitada pelo SO)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "Erro: as gravações do controle de ventoinhas exigem root — execute: sudo mactop %s"
+FanCLI_WriteFailed = "Erro: falha na gravação do controle de ventoinhas: %v"
+FanCLI_InvalidValue = "Erro: valor de --fan-set inválido '%s' — use um número de RPM, uma porcentagem como 60%%, min, max ou auto"
+FanCLI_UnknownFan = "Erro: nenhuma ventoinha com ID %d (%d ventoinhas detectadas)"
+FanCLI_NoMaxRPM = "Erro: a ventoinha não informa RPM máximo — use um RPM absoluto em vez de porcentagem/max"
+FanCLI_FanPinned = "Ventoinha %d fixada em %d RPM (modo manual)"
+FanCLI_AutoRestored = "Todas as ventoinhas restauradas ao controle automático"
+FanCLI_ManualWarning = "⚠ As ventoinhas permanecem em modo manual após o mactop sair — restaure o controle automático com: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "Aviso: o SMC aceitou a gravação, mas o estado da ventoinha não mudou — o sistema pode tê-la substituído"
 
 Metrics_PowerSparklineGroup = "%.2f W Total (Máx: %.2f W)"
 Metrics_PowerSparklineTitle = "Média %.2f W | %s"
@@ -383,6 +414,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "carregando"
 Info_BatteryDischarging = "na bateria"
 Info_BatteryAC = "tomada"
+Info_PowerSupply = "Fonte de alimentação"
 
 TUI_MemoryBandwidthHistory = "Histórico de largura de banda da memória"
 Metrics_MemBWHistoryDetail = "Largura de banda DRAM: %.1f GB/s"

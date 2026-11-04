@@ -32,6 +32,13 @@ TUI_ECPUUsage = "Sử dụng E-CPU"
 TUI_PCPUUsage = "Sử dụng P-CPU"
 TUI_GPUUsage = "Sử dụng GPU"
 TUI_MemoryUsage = "Sử dụng bộ nhớ"
+TUI_MemoryPressure = "Áp lực bộ nhớ"
+TUI_MemoryPressureHistory = "Lịch sử áp lực bộ nhớ"
+Metrics_MemPressureGauge = "Áp lực: %s (%.0f)"
+Metrics_MemPressurePanel = "Trạng thái: %s\nMức: %d\nGần đúng: %.0f\nNén: %.1f GB"
+Metrics_MemPressureHistoryDetail = "Áp lực: %s (%.0f)"
+Info_MemoryPressure = "Áp lực BN"
+Info_MemoryPressureValue = "%s (mức %d, khoảng %.0f)"
 TUI_ANEUsage = "Sử dụng ANE"
 TUI_PowerUsage = "Tiêu thụ năng lượng"
 TUI_NetworkDisk = "Mạng & Đĩa"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "BN"
 Process_TIME = "THỜI GIAN"
 Process_CMD = "LỆNH"
-
+Port_PORT = "CỔNG"
+Port_PROTO = "PROTO"
+Port_BIND = "GẮN"
+Port_PID = "PID"
+Port_USER = "NG.DÙNG"
+Port_ESTAB = "K.NỐI"
+Port_CMD = "LỆNH"
+TUI_PortsListFull = "Cổng (↑/↓ cuộn, / tìm, e ngoài, f đóng băng, F9 kết thúc)"
+TUI_PortsListFrozen = " Cổng [ĐÓNG BĂNG] (f để tiếp tục) "
+TUI_PortsListSearch = " Tìm cổng: %s_ (Esc để xóa) "
+TUI_PortsListKill = " Cổng - XÁC NHẬN KẾT THÚC (PID %d) "
+TUI_PortsListExternal = " Cổng [CHỈ NGOÀI] (e tất cả, / tìm, F9 kết thúc) "
 TUI_ProcessListFull = "Danh sách tiến trình (↑/↓ cuộn, / tìm, f đóng băng, F9 kết thúc)"
 TUI_ProcessListFrozen = " Danh sách tiến trình [ĐÓNG BĂNG] (f để tiếp tục) "
 TUI_ProcessListSearch = " Tìm: %s_ (Esc để xóa) "
@@ -263,6 +281,10 @@ Tùy chọn:
       --overlay-sections  Phần hiển thị phân tách bằng dấu phẩy (vd. cpu,gpu,memory,power)
       --overlay-opacity   Độ mờ cửa sổ overlay, 0.15-1.0 (mặc định: 0.88)
       --fan-control       Bật điều khiển quạt tương tác (ghi vào SMC)
+      --fan-set <value>   Đặt tốc độ quạt rồi thoát: RPM, phần trăm (60%), min, max hoặc auto (cần sudo)
+      --fan-id <n>        Áp dụng --fan-set cho một ID quạt (mặc định: tất cả quạt)
+      --fan-auto          Khôi phục điều khiển quạt tự động rồi thoát (cần sudo)
+      --fan-status        In trạng thái quạt dưới dạng JSON rồi thoát
       --dump-temps        Chẩn đoán: hiện tất cả khóa nhiệt SMC và thoát
       --dump-debug        Chẩn đoán: hiện thông tin gỡ lỗi IOReport/HID/SMC/NVMe và thoát
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (TB %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "Đ %s/s G %s/s"
 Info_DRAMBWValue = "Đ %.1f / G %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s trống)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ ĐIỀU KHIỂN QUẠT ĐANG HOẠT ĐỘNG](fg:red,mo
 Fan_ReadOnly = "[Chỉ đọc](fg:%s)  Dùng --fan-control để ghi  |  [l](fg:%s,mod:bold) Bố cục  [F](fg:%s,mod:bold) Đóng chế độ quạt"
 Fan_NeedsRoot = "[⚠ Điều khiển quạt cần root — khởi động lại bằng: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ lần ghi gần nhất không có tác dụng (OS từ chối)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "Lỗi: ghi điều khiển quạt yêu cầu root — chạy: sudo mactop %s"
+FanCLI_WriteFailed = "Lỗi: ghi điều khiển quạt thất bại: %v"
+FanCLI_InvalidValue = "Lỗi: giá trị --fan-set không hợp lệ '%s' — dùng số RPM, phần trăm như 60%%, min, max hoặc auto"
+FanCLI_UnknownFan = "Lỗi: không có quạt với ID %d (phát hiện %d quạt)"
+FanCLI_NoMaxRPM = "Lỗi: quạt không báo RPM tối đa — dùng giá trị RPM tuyệt đối thay vì phần trăm/max"
+FanCLI_FanPinned = "Quạt %d được ghim ở %d RPM (chế độ thủ công)"
+FanCLI_AutoRestored = "Tất cả quạt đã trở về điều khiển tự động"
+FanCLI_ManualWarning = "⚠ Quạt vẫn ở chế độ thủ công sau khi mactop thoát — khôi phục điều khiển tự động bằng: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "Cảnh báo: SMC đã chấp nhận lệnh ghi nhưng trạng thái quạt không thay đổi — hệ điều hành có thể đã ghi đè"
 
 Metrics_PowerSparklineGroup = "%.2f W Tổng (Tối đa: %.2f W)"
 Metrics_PowerSparklineTitle = "TB %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "đang sạc"
 Info_BatteryDischarging = "dùng pin"
 Info_BatteryAC = "nguồn AC"
+Info_PowerSupply = "Nguồn cấp điện"
 
 TUI_MemoryBandwidthHistory = "Lịch sử băng thông bộ nhớ"
 Metrics_MemBWHistoryDetail = "Băng thông DRAM: %.1f GB/s"

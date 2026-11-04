@@ -32,6 +32,13 @@ TUI_ECPUUsage = "E-CPU 使用率"
 TUI_PCPUUsage = "P-CPU 使用率"
 TUI_GPUUsage = "GPU 使用率"
 TUI_MemoryUsage = "内存 使用率"
+TUI_MemoryPressure = "内存压力"
+TUI_MemoryPressureHistory = "内存压力历史"
+Metrics_MemPressureGauge = "压力: %s (%.0f)"
+Metrics_MemPressurePanel = "状态: %s\n级别: %d\n约: %.0f\n压缩: %.1f GB"
+Metrics_MemPressureHistoryDetail = "压力: %s (%.0f)"
+Info_MemoryPressure = "内存压力"
+Info_MemoryPressureValue = "%s（级别 %d，约 %.0f）"
 TUI_ANEUsage = "ANE 使用率"
 TUI_PowerUsage = "功耗"
 TUI_NetworkDisk = "网络与磁盘"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "内存"
 Process_TIME = "时间"
 Process_CMD = "命令"
-
+Port_PORT = "端口"
+Port_PROTO = "协议"
+Port_BIND = "绑定"
+Port_PID = "PID"
+Port_USER = "用户"
+Port_ESTAB = "连接"
+Port_CMD = "命令"
+TUI_PortsListFull = "端口 (↑/↓ 滚动, / 搜索, e 外部, f 冻结, F9 结束)"
+TUI_PortsListFrozen = " 端口 [已冻结] (f 恢复) "
+TUI_PortsListSearch = " 端口搜索: %s_ (Esc 清除) "
+TUI_PortsListKill = " 端口 - 确认结束 (PID %d) "
+TUI_PortsListExternal = " 端口 [仅外部] (e 全部, / 搜索, F9 结束) "
 TUI_ProcessListFull = "进程列表 (↑/↓ 滚动, / 搜索, f 冻结, F9 结束)"
 TUI_ProcessListFrozen = " 进程列表 [已冻结] (f 恢复) "
 TUI_ProcessListSearch = " 搜索: %s_ (Esc 清除) "
@@ -264,6 +282,10 @@ CLI_HelpText = """
       --overlay-sections  逗号分隔的可见区块（例如 cpu,gpu,memory,power）
       --overlay-opacity   overlay 窗口透明度，0.15-1.0（默认：0.88）
       --fan-control       启用交互式风扇控制（会写入 SMC）
+      --fan-set <value>   设置风扇速度并退出：RPM、百分比 (60%)、min、max 或 auto（需要 sudo）
+      --fan-id <n>        将 --fan-set 应用于单个风扇 ID（默认：所有风扇）
+      --fan-auto          恢复风扇自动控制并退出（需要 sudo）
+      --fan-status        以 JSON 输出风扇状态并退出
       --dump-temps        诊断：输出所有原始 SMC 温度键并退出
       --dump-debug        诊断：输出 IOReport/HID/SMC/NVMe 调试信息并退出
 
@@ -301,7 +323,7 @@ Info_PowerValue = "%.2f W (平均 %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "读 %s/s 写 %s/s"
 Info_DRAMBWValue = "读 %.1f / 写 %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s 可用)"
 
@@ -313,6 +335,15 @@ Fan_ControlActive = "[⚠ 风扇控制已启用](fg:red,mod:bold)  [+/-](fg:%s,m
 Fan_ReadOnly = "[只读](fg:%s)  使用 --fan-control 启用写入  |  [l](fg:%s,mod:bold) 布局  [F](fg:%s,mod:bold) 退出风扇视图"
 Fan_NeedsRoot = "[⚠ 风扇控制需要 root — 重新运行: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ 上次写入未生效 (被系统拒绝)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "错误：风扇控制写入需要 root 权限 — 请运行：sudo mactop %s"
+FanCLI_WriteFailed = "错误:风扇控制写入失败:%v"
+FanCLI_InvalidValue = "错误:--fan-set 值 '%s' 无效 — 请使用 RPM 数值、60%% 这样的百分比、min、max 或 auto"
+FanCLI_UnknownFan = "错误:没有 ID 为 %d 的风扇(检测到 %d 个风扇)"
+FanCLI_NoMaxRPM = "错误:风扇未报告最大 RPM — 请使用绝对 RPM 值而不是百分比/max"
+FanCLI_FanPinned = "风扇 %d 已固定为 %d RPM(手动模式)"
+FanCLI_AutoRestored = "所有风扇已恢复自动控制"
+FanCLI_ManualWarning = "⚠ mactop 退出后风扇仍保持手动模式 — 恢复自动控制请运行:sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "警告:SMC 接受了写入,但风扇状态未改变 — 操作系统可能已将其覆盖"
 
 Metrics_PowerSparklineGroup = "%.2f W 总计 (最大: %.2f W)"
 Metrics_PowerSparklineTitle = "平均 %.2f W | %s"
@@ -385,6 +416,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "充电中"
 Info_BatteryDischarging = "使用电池"
 Info_BatteryAC = "交流电"
+Info_PowerSupply = "电源"
 
 TUI_MemoryBandwidthHistory = "内存带宽历史"
 Metrics_MemBWHistoryDetail = "DRAM 带宽: %.1f GB/s"

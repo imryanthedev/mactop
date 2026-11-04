@@ -32,6 +32,13 @@ TUI_ECPUUsage = "E-CPU Kullanımı"
 TUI_PCPUUsage = "P-CPU Kullanımı"
 TUI_GPUUsage = "GPU Kullanımı"
 TUI_MemoryUsage = "Bellek Kullanımı"
+TUI_MemoryPressure = "Bellek baskısı"
+TUI_MemoryPressureHistory = "Bellek baskısı geçmişi"
+Metrics_MemPressureGauge = "Baskı: %s (%.0f)"
+Metrics_MemPressurePanel = "Durum: %s\nSeviye: %d\nYaklaşık: %.0f\nSıkıştırılmış: %.1f GB"
+Metrics_MemPressureHistoryDetail = "Baskı: %s (%.0f)"
+Info_MemoryPressure = "Bel. baskısı"
+Info_MemoryPressureValue = "%s (seviye %d, yakl. %.0f)"
 TUI_ANEUsage = "ANE Kullanımı"
 TUI_PowerUsage = "Güç Tüketimi"
 TUI_NetworkDisk = "Ağ ve Disk"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "BEL"
 Process_TIME = "SÜRE"
 Process_CMD = "KOMUT"
-
+Port_PORT = "PORT"
+Port_PROTO = "PROTO"
+Port_BIND = "BAĞ"
+Port_PID = "PID"
+Port_USER = "KULL"
+Port_ESTAB = "KURUL"
+Port_CMD = "KOM"
+TUI_PortsListFull = "Portlar (↑/↓ kaydır, / ara, e dış, f dondur, F9 öldür)"
+TUI_PortsListFrozen = " Portlar [DONDURULDU] (f ile devam) "
+TUI_PortsListSearch = " Port ara: %s_ (Esc temizle) "
+TUI_PortsListKill = " Portlar - ÖLDÜRMEYİ ONAYLA (PID %d) "
+TUI_PortsListExternal = " Portlar [YALNIZCA DIŞ] (e tümü, / ara, F9 öldür) "
 TUI_ProcessListFull = "İşlem Listesi (↑/↓ kaydır, / ara, f dondur, F9 sonlandır)"
 TUI_ProcessListFrozen = " İşlem Listesi [DONDURULDU] (f ile devam et) "
 TUI_ProcessListSearch = " Ara: %s_ (Esc ile temizle) "
@@ -263,6 +281,10 @@ Seçenekler:
       --overlay-sections  Virgülle ayrılmış görünür bölümler (ör. cpu,gpu,memory,power)
       --overlay-opacity   Overlay pencere opaklığı, 0.15-1.0 (varsayılan: 0.88)
       --fan-control       Etkileşimli fan kontrolünü etkinleştir (SMC'ye yazar)
+      --fan-set <value>   Fan hızını ayarla ve çık: RPM, yüzde (60%), min, max veya auto (sudo gerektirir)
+      --fan-id <n>        --fan-set'i tek bir fan ID'sine uygula (varsayılan: tüm fanlar)
+      --fan-auto          Otomatik fan denetimini geri yükle ve çık (sudo gerektirir)
+      --fan-status        Fan durumunu JSON olarak yazdır ve çık
       --dump-temps        Tanılama: tüm ham SMC sıcaklık anahtarlarını göster ve çık
       --dump-debug        Tanılama: IOReport/HID/SMC/NVMe hata ayıklama bilgilerini göster ve çık
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (Ort %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "O %s/s Y %s/s"
 Info_DRAMBWValue = "O %.1f / Y %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s boş)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ FAN KONTROLÜ AKTİF](fg:red,mod:bold)  [+/-](fg:%s,mo
 Fan_ReadOnly = "[Salt okunur](fg:%s)  Yazmak için --fan-control kullanın  |  [l](fg:%s,mod:bold) Düzen  [F](fg:%s,mod:bold) Fan görünümünden çık"
 Fan_NeedsRoot = "[⚠ Fan denetimi root gerektirir — şununla yeniden başlatın: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ son yazma etkili olmadı (işletim sistemi reddetti)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "Hata: fan denetimi yazmaları root gerektirir — çalıştırın: sudo mactop %s"
+FanCLI_WriteFailed = "Hata: fan denetimi yazması başarısız: %v"
+FanCLI_InvalidValue = "Hata: geçersiz --fan-set değeri '%s' — bir RPM sayısı, 60%% gibi bir yüzde, min, max veya auto kullanın"
+FanCLI_UnknownFan = "Hata: %d ID'li fan yok (%d fan algılandı)"
+FanCLI_NoMaxRPM = "Hata: fan maksimum RPM bildirmiyor — yüzde/max yerine mutlak RPM değeri kullanın"
+FanCLI_FanPinned = "Fan %d, %d RPM'e sabitlendi (manuel mod)"
+FanCLI_AutoRestored = "Tüm fanlar otomatik denetime döndürüldü"
+FanCLI_ManualWarning = "⚠ mactop kapandıktan sonra fanlar manuel modda kalır — otomatik denetimi geri yüklemek için: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "Uyarı: SMC yazmayı kabul etti ama fan durumu değişmedi — işletim sistemi geçersiz kılmış olabilir"
 
 Metrics_PowerSparklineGroup = "%.2f W Toplam (Maks: %.2f W)"
 Metrics_PowerSparklineTitle = "Ort %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "şarj oluyor"
 Info_BatteryDischarging = "pilde"
 Info_BatteryAC = "şebeke"
+Info_PowerSupply = "Güç kaynağı"
 
 TUI_MemoryBandwidthHistory = "Bellek Bant Genişliği Geçmişi"
 Metrics_MemBWHistoryDetail = "DRAM Bant Genişliği: %.1f GB/s"

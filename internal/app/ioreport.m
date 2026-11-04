@@ -2,6 +2,7 @@
 // ioreport.m - Objective-C implementation for IOReport power/thermal metrics
 
 #include "smc.h"
+#include "pmp_names.h"
 #import <CoreFoundation/CoreFoundation.h>
 #import <CoreWLAN/CoreWLAN.h>
 #import <Foundation/Foundation.h>
@@ -20,6 +21,9 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <notify.h>
+
+// Max H11ANEIn driver-interface nodes (Ultra-class chips expose 2).
+#define MAX_ANE_SERVICES 4
 
 // Wi-Fi link info structure
 typedef struct {
@@ -173,6 +177,7 @@ typedef struct {
   int targetRPM;
   int mode; // 0=auto, 1=forced
   int id;
+  int tachReadable; // 0 = the tach key reported nothing credible
 } fan_info_t;
 
 // Temperature sensor structure
@@ -185,6 +190,8 @@ typedef struct {
 static IOReportSubscriptionRef g_subscription = NULL;
 static CFMutableDictionaryRef g_channels = NULL;
 static io_connect_t g_smcConn = 0;
+static bool g_energyModelCpuGated = false;
+static bool g_energyModelDramGated = false;
 static uint32_t g_gpu_freqs[64];
 static int g_gpu_freq_count = 0;
 static uint32_t g_ecpu_freqs[64];
@@ -747,15 +754,241 @@ static void startBgCalibrationOnce(void) {
   }
 }
 
+static CFIndex pmpChannelCount(CFDictionaryRef chans) {
+  if (chans == NULL)
+    return 0;
+  CFArrayRef arr = CFDictionaryGetValue(chans, CFSTR("IOReportChannels"));
+  return arr ? CFArrayGetCount(arr) : 0;
+}
+
+// Copies the channels of "PMP" plus the per-die "PMP0", "PMP1", ... groups
+// into one dictionary. Dies are numbered contiguously, so probing stops at the
+// first empty one. Returns NULL when no PMP group has any channel.
+static CFDictionaryRef copyPMPChannels(void) {
+  CFMutableDictionaryRef merged = NULL;
+  for (int die = -1; die < 8; die++) {
+    char name[8];
+    if (die < 0)
+      snprintf(name, sizeof(name), "PMP");
+    else
+      snprintf(name, sizeof(name), "PMP%d", die);
+    CFStringRef grp = CFStringCreateWithCString(kCFAllocatorDefault, name,
+                                                kCFStringEncodingUTF8);
+    CFDictionaryRef chans = IOReportCopyChannelsInGroup(grp, NULL, 0, 0, 0);
+    CFRelease(grp);
+    if (pmpChannelCount(chans) == 0) {
+      if (chans != NULL)
+        CFRelease(chans);
+      if (die >= 0)
+        break;
+      continue;
+    }
+    if (merged == NULL)
+      merged = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, chans);
+    else
+      IOReportMergeChannels((CFDictionaryRef)merged, chans, NULL);
+    CFRelease(chans);
+  }
+  return merged;
+}
+
+// Residency-weighted average of a state channel whose state names are
+// numeric bins ("12GB/s", "2W", "0.250W"). See binWeightedAverage.
+#define PMP_MAX_BINS 64
+
+static double stateBinAverage(CFDictionaryRef item, bool skipLowest) {
+  int32_t n = IOReportStateGetCount(item);
+  if (n > PMP_MAX_BINS)
+    n = PMP_MAX_BINS;
+  double bins[PMP_MAX_BINS];
+  int64_t residency[PMP_MAX_BINS];
+  for (int32_t s = 0; s < n; s++) {
+    char buf[32] = {0};
+    CFStringRef name = IOReportStateGetNameForIndex(item, s);
+    if (name != NULL)
+      CFStringGetCString(name, buf, sizeof(buf), kCFStringEncodingUTF8);
+    bins[s] = atof(buf);
+    residency[s] = IOReportStateGetResidency(item, s);
+  }
+  return binWeightedAverage(bins, residency, n, skipLowest);
+}
+
+static const double kMaxPlausiblePowerWatts = 1000.0;
+
+// Whole-machine power, first key that reads non-zero wins:
+//   PSTR  System Total. Laptops; reads 0 on Mac Studio.
+//   PDTR  DC-In total. Reads 0 on Mac Studio.
+//   PD0R  DC-In rail. The internal PSU's output on Mac Studio, so the
+//         whole board. Only reached when PSTR is 0, so laptops (where it
+//         would include battery charging) keep PSTR.
+static double readSystemPower(io_connect_t conn) {
+  static const char *keys[] = {"PSTR", "PDTR", "PD0R"};
+  for (int scaledOnly = 1; scaledOnly >= 0; scaledOnly--) {
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+      if (scaledOnly && !SMCKeyTypeIsScaled(conn, keys[i]))
+        continue;
+      double w = SMCGetFloatValue(conn, keys[i]);
+      if (w > 0 && w <= kMaxPlausiblePowerWatts)
+        return w;
+    }
+  }
+  return 0;
+}
+
+// DRAM power from SMC "PZD1", "PZD2", ... (one per die), for when the
+// Energy Model DRAM counters are gated (macOS 27). On an M5 Max, PZD1 rose
+// from 1.8 W to 5.9 / 8.0 / 12.8 / 14.0 W with 1 / 2 / 4 / 8 memory-streaming
+// threads and stayed at 1.8 W under 12 compute-only threads. The key count is
+// probed once; keys are contiguous from 1.
+//
+static double readDramPower(io_connect_t conn) {
+  static int keyCount = -1;
+  char key[5];
+  if (keyCount < 0) {
+    keyCount = 0;
+    for (int i = 1; i <= 8; i++) {
+      SMCKeyData_t val;
+      snprintf(key, sizeof(key), "PZD%d", i);
+      if (SMCReadKey(conn, key, &val) != kIOReturnSuccess)
+        break;
+      keyCount = i;
+    }
+  }
+  double watts = 0;
+  for (int i = 1; i <= keyCount; i++) {
+    snprintf(key, sizeof(key), "PZD%d", i);
+    if (!SMCKeyTypeIsScaled(conn, key))
+      continue;
+    double w = SMCGetFloatValue(conn, key);
+    if (w > 0 && w <= kMaxPlausiblePowerWatts)
+      watts += w;
+  }
+  return watts;
+}
+
+// Residency-weighted average of IOReport histogram buckets labeled
+// "  16GB/s", "1GB/s", etc. Returns -1 if this channel is not a histogram.
+//
+// Bucket 0 is an underflow/floor bin: on M4 Pro DCS BW the labels start at
+// 16 GB/s with no 0 bucket, so idle residency sits entirely in "16GB/s"
+// even when true DRAM traffic is ~0.1 GB/s (M4-base AMC idle). Count
+// bucket 0 as 0 GB/s. Higher buckets keep their labels; under load bucket
+// 0 is empty so the reading is unchanged.
+static double histogramAvgGBs(CFDictionaryRef item) {
+  int32_t n = IOReportStateGetCount(item);
+  if (n <= 1)
+    return -1.0;
+  int64_t tot = 0;
+  double weighted = 0.0;
+  for (int32_t s = 0; s < n; s++) {
+    int64_t r = IOReportStateGetResidency(item, s);
+    if (r <= 0)
+      continue;
+    CFStringRef stateName = IOReportStateGetNameForIndex(item, s);
+    char sn[64] = {0};
+    if (stateName != NULL)
+      CFStringGetCString(stateName, sn, sizeof(sn), kCFStringEncodingUTF8);
+    // atof skips leading spaces: "  16GB/s" -> 16.0
+    double gbps = (s == 0) ? 0.0 : atof(sn);
+    if (s != 0 && gbps <= 0.0)
+      continue;
+    weighted += gbps * (double)r;
+    tot += r;
+  }
+  if (tot <= 0)
+    return 0.0;
+  return weighted / (double)tot;
+}
+
+static int64_t histogramBytesOverWindow(double avgGBs, int durationMs,
+                                        int64_t actualDurationNs) {
+  if (avgGBs < 0.0)
+    return 0;
+  double sampleSec = (actualDurationNs > 0)
+                         ? (double)actualDurationNs / 1e9
+                         : (double)durationMs / 1000.0;
+  if (sampleSec <= 0.0)
+    return 0;
+  return (int64_t)(avgGBs * 1e9 * sampleSec);
+}
+
+// Keep only the PMP channels mactop actually parses. The full PMP group is
+// 500+ channels and is a large per-tick IPC cost. Covers every consumer of a
+// PMP<n> channel: DRAM bandwidth, ANE utilization/bandwidth, and the CPU
+// cluster power histograms used when the Energy Model CPU counter reads 0.
+static int pmpChannelIsParsed(CFDictionaryRef ch) {
+  char name[256] = {0};
+  char sub[64] = {0};
+  CFStringRef nm = IOReportChannelGetChannelName(ch);
+  CFStringRef sg = IOReportChannelGetSubGroup(ch);
+  if (nm != NULL)
+    CFStringGetCString(nm, name, sizeof(name), kCFStringEncodingUTF8);
+  if (sg != NULL)
+    CFStringGetCString(sg, sub, sizeof(sub), kCFStringEncodingUTF8);
+  // M4 Pro/Max DRAM rate histograms; skips the PACC/EACC/AGX agent
+  // histograms beside them, since AMCC is the memory-controller aggregate.
+  if (isAmccDcsBwChannel(sub, name))
+    return 1;
+  // Older chips: PMP "DRAM BW" simple integer byte counters (if present).
+  if (strcmp(sub, "DRAM BW") == 0)
+    return 1;
+  // ANE utilization + AF BW histograms (same filter as the ANE-only merge).
+  if (isAneChannelName(name))
+    return 1;
+  // CPU cluster power histograms ("Energy" / "PACC", "MACC1", "PACC0 SRAM").
+  if (isPmpCpuPowerChannel(sub, name))
+    return 1;
+  return 0;
+}
+
+static CFMutableDictionaryRef copyFilteredPMPFallback(CFDictionaryRef pmp) {
+  CFArrayRef arr = NULL;
+  if (pmp != NULL)
+    arr = CFDictionaryGetValue(pmp, CFSTR("IOReportChannels"));
+  if (arr == NULL)
+    return NULL;
+  CFMutableArrayRef keep =
+      CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+  if (keep == NULL)
+    return NULL;
+  CFIndex n = CFArrayGetCount(arr);
+  for (CFIndex i = 0; i < n; i++) {
+    CFDictionaryRef ch = (CFDictionaryRef)CFArrayGetValueAtIndex(arr, i);
+    if (pmpChannelIsParsed(ch))
+      CFArrayAppendValue(keep, ch);
+  }
+  if (CFArrayGetCount(keep) == 0) {
+    CFRelease(keep);
+    return NULL;
+  }
+  CFMutableDictionaryRef out = CFDictionaryCreateMutable(
+      kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
+      &kCFTypeDictionaryValueCallBacks);
+  if (out == NULL) {
+    CFRelease(keep);
+    return NULL;
+  }
+  CFDictionarySetValue(out, CFSTR("IOReportChannels"), keep);
+  CFRelease(keep);
+  return out;
+}
+
 static void ensurePMPDramChannels(void) {
   if (g_pmp_channels_attempted || g_channels == NULL)
     return;
 
-  CFDictionaryRef pmpChan =
-      IOReportCopyChannelsInGroup(CFSTR("PMP"), NULL, 0, 0, 0);
+  CFDictionaryRef pmpChan = copyPMPChannels();
   if (pmpChan == NULL) {
     // No PMP group exists on this machine — permanent, mark attempted so we
     // don't probe every sample.
+    g_pmp_channels_attempted = 1;
+    return;
+  }
+
+  CFMutableDictionaryRef pmpFiltered = copyFilteredPMPFallback(pmpChan);
+  CFRelease(pmpChan);
+  if (pmpFiltered == NULL) {
+    // PMP exists but has none of the DRAM/ANE/CPU-power channels we parse.
     g_pmp_channels_attempted = 1;
     return;
   }
@@ -771,11 +1004,11 @@ static void ensurePMPDramChannels(void) {
   CFMutableDictionaryRef merged =
       CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, g_channels);
   if (merged == NULL) {
-    CFRelease(pmpChan);
+    CFRelease(pmpFiltered);
     return; // transient allocation failure — retry on a later sample
   }
-  IOReportMergeChannels((CFDictionaryRef)merged, pmpChan, NULL);
-  CFRelease(pmpChan);
+  IOReportMergeChannels((CFDictionaryRef)merged, pmpFiltered, NULL);
+  CFRelease(pmpFiltered);
 
   CFMutableDictionaryRef subsystem = NULL;
   IOReportSubscriptionRef newSub =
@@ -1045,12 +1278,13 @@ int initIOReport() {
   }
   g_direct_dram_bw_available = hasDirectBWChannels;
 
-  // Only add PMP channels when no direct AMC bandwidth channels exist. If AMC
-  // channels exist but remain zero under load, the sampler enables fallback and
-  // re-subscribes with PMP dynamically.
+  // Only add PMP DRAM/ANE channels when no direct AMC bandwidth channels exist.
+  // If AMC channels exist but remain zero under load, the sampler enables
+  // fallback and re-subscribes with the filtered PMP set dynamically.
   if (!g_direct_dram_bw_available) {
-    // PMP is cheap to add compared with calibration; calibration stays deferred
-    // until runtime activity proves there is memory traffic to recover.
+    // Filtered PMP (AMCC DCS-BW + ANE + legacy DRAM BW) is cheap compared
+    // with calibration; calibration stays deferred until runtime activity
+    // proves there is memory traffic to recover.
     ensurePMPDramChannels();
   }
 
@@ -1064,37 +1298,43 @@ int initIOReport() {
   // channels) to reduce per-tick IPC cost. That meant the main subscription
   // never bound to the PMP ANE channels → ANE always appeared as zero.
   //
-  // Fix: pull in *only* the ANE-related PMP channels (filtered by name).
+  // Fix: pull in *only* the ANE-related PMP channels (filtered by name),
+  // plus the "Energy" CPU cluster histograms used for CPU power on M5.
   // This binds us to the correct IOReport data for ANE without the full PMP cost.
-  // Skipped when ensurePMPDramChannels() already merged the full PMP group
-  // above (A-series, and M5+ without direct AMC BW): merging the ANE channels
-  // again would duplicate them in the subscription. The ANE parsers in
-  // samplePowerMetrics are duplicate-safe (max, not sum) either way — the
-  // dynamic PMP fallback re-merge can still introduce duplicates later.
+  // Skipped when ensurePMPDramChannels() already merged the filtered PMP set
+  // above (M4 Pro/Max, A-series, and M5+ without direct AMC BW): that set
+  // already includes ANE channels, so merging them again would duplicate
+  // them in the subscription. The ANE parsers in samplePowerMetrics are
+  // duplicate-safe (max, not sum) either way — the dynamic PMP fallback
+  // re-merge can still introduce duplicates later.
   if (!g_pmp_channels_attempted) {
-    CFDictionaryRef pmpAll = IOReportCopyChannelsInGroup(CFSTR("PMP"), NULL, 0, 0, 0);
+    CFDictionaryRef pmpAll = copyPMPChannels();
     if (pmpAll) {
       CFArrayRef pmpChs = CFDictionaryGetValue(pmpAll, CFSTR("IOReportChannels"));
       CFIndex pmpCnt = pmpChs ? CFArrayGetCount(pmpChs) : 0;
       if (pmpCnt > 0) {
-        CFMutableArrayRef aneChs = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+        CFMutableArrayRef subsetChs = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
         for (CFIndex i = 0; i < pmpCnt; i++) {
           CFDictionaryRef ch = (CFDictionaryRef)CFArrayGetValueAtIndex(pmpChs, i);
           CFStringRef nm = IOReportChannelGetChannelName(ch);
+          CFStringRef sg = IOReportChannelGetSubGroup(ch);
           if (nm) {
             char buf[256] = {0};
+            char sbuf[64] = {0};
             CFStringGetCString(nm, buf, sizeof(buf), kCFStringEncodingUTF8);
-            if (strstr(buf, "ANE") != NULL || strstr(buf, "ane") != NULL) {
-              CFArrayAppendValue(aneChs, ch);
+            if (sg)
+              CFStringGetCString(sg, sbuf, sizeof(sbuf), kCFStringEncodingUTF8);
+            if (isAneChannelName(buf) || isPmpCpuPowerChannel(sbuf, buf)) {
+              CFArrayAppendValue(subsetChs, ch);
             }
           }
         }
-        CFIndex aneCnt = CFArrayGetCount(aneChs);
-        if (aneCnt > 0) {
-          CFMutableDictionaryRef anePmp = CFDictionaryCreateMutable(
+        CFIndex subsetCnt = CFArrayGetCount(subsetChs);
+        if (subsetCnt > 0) {
+          CFMutableDictionaryRef subsetPmp = CFDictionaryCreateMutable(
               kCFAllocatorDefault, 0,
               &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-          CFDictionarySetValue(anePmp, CFSTR("IOReportChannels"), aneChs);
+          CFDictionarySetValue(subsetPmp, CFSTR("IOReportChannels"), subsetChs);
 
           // Merge into a COPY and only publish channels + subscription
           // together once the new subscription succeeds. Merging g_channels
@@ -1106,30 +1346,30 @@ int initIOReport() {
           // calibration thread that reads these globals exists. (The runtime
           // re-merge in ensurePMPDramChannels deliberately does NOT release
           // for that reason.)
-          CFMutableDictionaryRef aneMerged =
+          CFMutableDictionaryRef subsetMerged =
               CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, g_channels);
-          if (aneMerged != NULL) {
-            IOReportMergeChannels((CFDictionaryRef)aneMerged, anePmp, NULL);
-            CFMutableDictionaryRef aneSubsystem = NULL;
+          if (subsetMerged != NULL) {
+            IOReportMergeChannels((CFDictionaryRef)subsetMerged, subsetPmp, NULL);
+            CFMutableDictionaryRef subsetSubsystem = NULL;
             IOReportSubscriptionRef newSub =
-                IOReportCreateSubscription(NULL, aneMerged, &aneSubsystem, 0, NULL);
+                IOReportCreateSubscription(NULL, subsetMerged, &subsetSubsystem, 0, NULL);
             if (newSub != NULL) {
               if (g_subscription != NULL) {
                 CFRelease(g_subscription);
               }
               CFRelease(g_channels);
-              g_channels = aneMerged;
+              g_channels = subsetMerged;
               g_subscription = newSub;
             } else {
-              CFRelease(aneMerged); // keep the working pre-merge pair
+              CFRelease(subsetMerged); // keep the working pre-merge pair
             }
-            if (aneSubsystem != NULL) {
-              CFRelease(aneSubsystem);
+            if (subsetSubsystem != NULL) {
+              CFRelease(subsetSubsystem);
             }
           }
-          CFRelease(anePmp);
+          CFRelease(subsetPmp);
         }
-        CFRelease(aneChs);
+        CFRelease(subsetChs);
       }
       CFRelease(pmpAll);
     }
@@ -1162,7 +1402,7 @@ void debugIOReport() {
     const char *groups[] = {
         "Energy Model",           "GPU Stats", "CPU Stats", "AMC Stats",
         "ODS",                    "Performance Statistics", "CLPC",
-        "PMP",                    NULL};
+        "PMP",                    "PMP0", "PMP1", NULL};
 
     for (int i = 0; groups[i] != NULL; i++) {
       CFStringRef groupStr = CFStringCreateWithCString(
@@ -1259,7 +1499,7 @@ void dumpIOReportDebug(void) {
   printf("--- IOReport Channel Groups ---\n");
   const char *groups[] = {
     "Energy Model", "GPU Stats", "CPU Stats", "AMC Stats",
-    "PMP", "CLPC", "ODS", "Performance Statistics",
+    "PMP", "PMP0", "PMP1", "CLPC", "ODS", "Performance Statistics",
     NULL
   };
   for (int i = 0; groups[i] != NULL; i++) {
@@ -1471,6 +1711,19 @@ typedef struct {
   // derive dramReadBytes/dramWriteBytes. Used by Go to compute exact GB/s
   // independent of scheduling jitter on usleep(durationMs).
   int64_t actualDurationNs;
+  // Per-cluster ANE power-domain duty cycle (0-100%) from each H11ANEIn node.
+  // Only populated by the IORegistry fallback; length is aneClusterCount.
+  int aneClusterCount;
+  double aneClusterActive[MAX_ANE_SERVICES];
+  // 1 => aneActive is the binary ANE power-domain duty cycle (M5 Max / macOS 27
+  // non-root fallback: ANE powered vs idle), NOT a true utilization %.
+  int aneIsPowerState;
+  // 1 => the ANE is an exclave-based driver (Apple H16+, e.g. M5 / M5 Max).
+  // On these parts IOPowerManagement.CurrentPowerState stays pinned high while
+  // ANY background ML service (mediaanalysisd, photoanalysisd, …) uses the ANE,
+  // so the power-state signal is only meaningful as a binary powered/idle
+  // indicator — never a utilization %. The UI gates on this per chip family.
+  int aneIsExclave;
   // Fan data
   int fanCount;
   fan_info_t fans[8];
@@ -1733,7 +1986,7 @@ static void printLiveEnergyContributors(int durationMs) {
   // they ever produce data) are the ones mactop's ANE %% is computed from:
   // active = time not in OFF/IDLE/DOWN/SLEEP/VMIN/F1/0%%.
   printf("\n--- PMP ANE channel scan (raw state residencies) ---\n");
-  CFDictionaryRef pmp = IOReportCopyChannelsInGroup(CFSTR("PMP"), NULL, 0, 0, 0);
+  CFDictionaryRef pmp = copyPMPChannels();
   if (pmp) {
     CFMutableDictionaryRef pmpCh = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, CFDictionaryGetCount(pmp), pmp);
     CFRelease(pmp);
@@ -1762,17 +2015,13 @@ static void printLiveEnergyContributors(int durationMs) {
             char gbuf[64]={0}, nbuf[256]={0};
             CFStringGetCString(grp, gbuf, sizeof(gbuf), kCFStringEncodingUTF8);
             CFStringGetCString(nm, nbuf, sizeof(nbuf), kCFStringEncodingUTF8);
-            if (strcmp(gbuf, "PMP") != 0) continue;
-            if (strstr(nbuf, "ANE") == NULL && strstr(nbuf, "ane") == NULL) continue;
+            if (!isPMPGroup(gbuf)) continue;
+            if (!isAneChannelName(nbuf)) continue;
             CFStringRef subRef = IOReportChannelGetSubGroup(ch);
             char sub[64]={0};
             if (subRef) CFStringGetCString(subRef, sub, sizeof(sub), kCFStringEncodingUTF8);
-            bool isAneFloorChannel =
-                (strcmp(nbuf, "ANE-AF-BW") == 0 || strcmp(nbuf, "ANE-DCS-BW") == 0) &&
-                strstr(sub, "Floor") != NULL;
-            bool isAneEngineStateChannel = (strcmp(nbuf, "ANE0") == 0) &&
-              (strstr(sub, "Floor") != NULL || strstr(sub, "Fast-Die") != NULL ||
-               strstr(sub, "CE") != NULL || strstr(sub, "SOC") != NULL || strstr(sub, "Util") != NULL);
+            bool isAneFloorChannel = isAneFloorChannelName(nbuf, sub);
+            bool isAneEngineStateChannel = isAneEngineStateChannelName(nbuf, sub);
             CFStringRef uRef = IOReportChannelGetUnitLabel(ch);
             char ubuf[32]={0};
             if (uRef) CFStringGetCString(uRef, ubuf, sizeof(ubuf), kCFStringEncodingUTF8);
@@ -1791,7 +2040,7 @@ static void printLiveEnergyContributors(int durationMs) {
                   CFStringGetCString(sn, snb, sizeof(snb), kCFStringEncodingUTF8);
                   if (strcmp(snb, "OFF") != 0 && strcmp(snb, "IDLE") != 0 &&
                       strcmp(snb, "DOWN") != 0 && strcmp(snb, "SLEEP") != 0 &&
-                      strcmp(snb, "VMIN") != 0 && strcmp(snb, "F1") != 0 &&
+                      strcmp(snb, "VMIN") != 0 && strcmp(snb, "F1") != 0 && strcmp(snb, "F2") != 0 &&
                       strcmp(snb, "0%") != 0) {
                     act += r;
                   }
@@ -2009,6 +2258,180 @@ static void loadAllTempSensors() {
 }
 
 // Diagnostic dump: print ALL SMC temperature keys, including filtered ones
+// dumpSMCFanKeys lists every SMC key beginning with 'F' (fans) with the raw
+// SMCReadKey RESULT CODE, FourCC type, size, raw bytes, and decoded value.
+// Critically it shows the read result separately from the value: SMCGetFloatValue
+// returns 0.0 both for a genuine 0 AND for a failed read, so "value=0.00" alone
+// is ambiguous. If F0Ac shows result!=0x0 the tach key is unreadable to an
+// unprivileged process (the M2 Ultra "0 RPM" case — TG Pro reads via a
+// privileged helper); if result=0x0 with raw=00 00 00 00 the value is truly 0.
+static void dumpSMCFanKeys(void) {
+  if (!g_smcConn)
+    return;
+  printf("\n=== SMC Fan Keys (F*) — result code distinguishes read-fail from true 0 ===\n");
+  int total = SMCGetKeyCount(g_smcConn);
+  for (int i = 0; i < total; i++) {
+    char k[5];
+    if (SMCGetKeyFromIndex(g_smcConn, i, k) != kIOReturnSuccess)
+      continue;
+    if (k[0] != 'F')
+      continue;
+    // Declared type/size via key info (works even if the value read is gated).
+    SMCKeyData_keyInfo_t ki = {0};
+    char t[5] = {0};
+    if (SMCGetKeyInfo(g_smcConn, k, &ki) == kIOReturnSuccess) {
+      t[0] = (ki.dataType >> 24) & 0xff;
+      t[1] = (ki.dataType >> 16) & 0xff;
+      t[2] = (ki.dataType >> 8) & 0xff;
+      t[3] = ki.dataType & 0xff;
+    }
+    SMCKeyData_t v;
+    kern_return_t r = SMCReadKey(g_smcConn, k, &v);
+    if (r != kIOReturnSuccess) {
+      printf("  %-4s  type=%-4s  size=%u  *** READ FAILED result=0x%08x ***\n",
+             k, t, ki.dataSize, r);
+      continue;
+    }
+    char hex[40] = {0};
+    unsigned int n = v.keyInfo.dataSize < 8 ? v.keyInfo.dataSize : 8;
+    for (unsigned int b = 0; b < n; b++)
+      snprintf(hex + b * 3, 4, "%02x ", (unsigned char)v.bytes[b]);
+    printf("  %-4s  type=%-4s  size=%u  raw=%-24s  value=%.2f\n", k, t,
+           v.keyInfo.dataSize, hex, SMCGetFloatValue(g_smcConn, k));
+  }
+}
+
+// dumpSMCFanCandidates scans every SMC key in the plausible fan-RPM band and
+// reports only the ones whose value MOVES between two samples. Apple Silicon fan
+// keys are near-arbitrary per-generation FourCCs (iStat/TG Pro keep a
+// hand-curated per-model map; the Asahi macsmc driver reads the key from the
+// device tree) — the actual-RPM key is NOT universally "F0Ac". A tachometer
+// tracks the fan, so it moves; a min/max limit, fixed floor or clock rate in the
+// same numeric band does not. Filtering on movement is what turns the list into
+// a single usable answer, which a value-only dump cannot do. Run while the fans
+// are ramping. See issue #78.
+static void dumpSMCFanCandidates(void) {
+  if (!g_smcConn)
+    return;
+  printf("\n=== Fan-tach candidates: keys in the RPM band that MOVE ===\n");
+  printf("(A real tachometer tracks the fan. A min/max limit, a fixed floor or a\n");
+  printf(" clock rate is a constant, so it is filtered out. Run this while the\n");
+  printf(" fans are ramping and the key that moves is the one to map.)\n");
+
+  int total = SMCGetKeyCount(g_smcConn);
+  if (total <= 0)
+    return;
+
+  char (*keys)[5] = calloc((size_t)total, 5);
+  double *first = calloc((size_t)total, sizeof(double));
+  if (!keys || !first) {
+    free(keys);
+    free(first);
+    return;
+  }
+
+  int n = 0;
+  for (int i = 0; i < total; i++) {
+    char k[5];
+    if (SMCGetKeyFromIndex(g_smcConn, i, k) != kIOReturnSuccess)
+      continue;
+    double v = SMCGetFloatValue(g_smcConn, k);
+    if (v < 200.0 || v > 6000.0)
+      continue;
+    memcpy(keys[n], k, 5);
+    first[n] = v;
+    n++;
+  }
+  if (n == 0) {
+    printf("  (no keys in the 200-6000 band)\n");
+    free(keys);
+    free(first);
+    return;
+  }
+
+  usleep(1500000);
+
+  int moved = 0;
+  for (int i = 0; i < n; i++) {
+    double second = SMCGetFloatValue(g_smcConn, keys[i]);
+    if (second == first[i])
+      continue;
+    SMCKeyData_keyInfo_t ki;
+    char t[5] = {0};
+    if (SMCGetKeyInfo(g_smcConn, keys[i], &ki) == kIOReturnSuccess) {
+      t[0] = (ki.dataType >> 24) & 0xff;
+      t[1] = (ki.dataType >> 16) & 0xff;
+      t[2] = (ki.dataType >> 8) & 0xff;
+      t[3] = ki.dataType & 0xff;
+    }
+    printf("  MOVING %-4s  type=%-4s  %.2f -> %.2f\n", keys[i], t, first[i],
+           second);
+    moved++;
+  }
+  if (moved == 0)
+    printf("  (no key in the band changed over 1.5 s — no live tach in it)\n");
+  printf("  (%d of %d keys in the band were constant and filtered out)\n",
+         n - moved, n);
+
+  free(keys);
+  free(first);
+}
+
+static void printSMCPowerKeyRow(const char *key) {
+  char type[5] = {0};
+  SMCGetKeyTypeString(g_smcConn, key, type, sizeof(type));
+  double value = SMCGetFloatValue(g_smcConn, key);
+  int scaled = SMCKeyTypeIsScaled(g_smcConn, key);
+  printf("  %-5s type=%-4s scaled=%-3s value=%10.2f  %s\n", key, type,
+         scaled ? "yes" : "no", value,
+         value > 0 && value <= 1000.0 ? "accepted" : "REJECTED");
+}
+
+void dumpSMCPowerKeys(void) {
+  if (!g_smcConn)
+    g_smcConn = SMCOpen();
+  if (!g_smcConn) {
+    printf("SMC connection not available\n");
+    return;
+  }
+  printf("\n=== System power keys (readSystemPower order) ===\n");
+  printSMCPowerKeyRow("PSTR");
+  printSMCPowerKeyRow("PDTR");
+  printSMCPowerKeyRow("PD0R");
+  printf("chosen system power = %.2f W\n\n", readSystemPower(g_smcConn));
+
+  printf("=== DRAM power keys (PZD*) ===\n");
+  for (int i = 1; i <= 8; i++) {
+    char key[5];
+    snprintf(key, sizeof(key), "PZD%d", i);
+    SMCKeyData_keyInfo_t keyInfo;
+    if (SMCGetKeyInfo(g_smcConn, key, &keyInfo) != kIOReturnSuccess)
+      continue;
+    printSMCPowerKeyRow(key);
+  }
+
+  printf("\n=== Every SMC key decoding above 1000 (the kW-artifact range) ===\n");
+  printf("(Any hit here is a candidate source for a bogus Total Consumption.\n");
+  printf(" Bare-integer types here are raw counts, not watts.)\n");
+  int hits = 0;
+  int total = SMCGetKeyCount(g_smcConn);
+  for (int i = 0; i < total; i++) {
+    char k[5];
+    if (SMCGetKeyFromIndex(g_smcConn, i, k) != kIOReturnSuccess)
+      continue;
+    double v = SMCGetFloatValue(g_smcConn, k);
+    if (v <= 1000.0 || v > 1000000.0)
+      continue;
+    char type[5] = {0};
+    SMCGetKeyTypeString(g_smcConn, k, type, sizeof(type));
+    printf("  %-4s type=%-4s scaled=%-3s value=%.2f\n", k, type,
+           SMCKeyTypeIsScaled(g_smcConn, k) ? "yes" : "no", v);
+    hits++;
+  }
+  if (hits == 0)
+    printf("  (none)\n");
+}
+
 void dumpAllSMCTemps(void) {
   if (!g_smcConn) {
     printf("SMC connection not available\n");
@@ -2082,6 +2505,9 @@ void dumpAllSMCTemps(void) {
     float val = (float)SMCGetFloatValue(g_smcConn, g_gpu_keys[i]);
     printf("  GPU[%d] = %s  %.1f°C\n", i, g_gpu_keys[i], val);
   }
+
+  dumpSMCFanKeys();
+  dumpSMCFanCandidates();
 }
 
 // Read fan data from SMC
@@ -2102,6 +2528,7 @@ static int readFanInfo(fan_info_t *fans, int maxFans) {
   for (int i = 0; i < fanCount; i++) {
     char key[5];
     fans[i].id = i;
+    fans[i].tachReadable = 1;
 
     // Read actual RPM: F%dAc
     snprintf(key, sizeof(key), "F%dAc", i);
@@ -2119,6 +2546,15 @@ static int readFanInfo(fan_info_t *fans, int maxFans) {
     snprintf(key, sizeof(key), "F%dTg", i);
     fans[i].targetRPM = (int)SMCGetFloatValue(g_smcConn, key);
 
+    // A fan whose SMC floor is above zero cannot physically be stopped, so a
+    // 0 here means the tach value is not being exposed to an unprivileged
+    // reader rather than that the fan is idle. Report it as unreadable instead
+    // of a measurement: on the M2 Ultra the tach key decodes cleanly and still
+    // returns 0.00 even under sustained full-core load, while F%dMn / F%dMx
+    // read correctly. See issue #78.
+    if (fans[i].actualRPM <= 0 && fans[i].minRPM > 0)
+      fans[i].tachReadable = 0;
+
     // Read mode: F%dMd (0=auto, 1=forced; data type varies by Mac model)
     snprintf(key, sizeof(key), "F%dMd", i);
     fans[i].mode = (int)SMCGetFloatValue(g_smcConn, key);
@@ -2130,6 +2566,24 @@ static int readFanInfo(fan_info_t *fans, int maxFans) {
   return fanCount;
 }
 
+// ensureSMCConn opens the SMC connection on demand. The TUI path opens it in
+// initIOReport(), but the one-shot fan CLI (--fan-set / --fan-auto /
+// --fan-status) deliberately skips the full IOReport pipeline — without this,
+// every fan read/write would fail with a closed connection.
+static int ensureSMCConn(void) {
+  if (!g_smcConn)
+    g_smcConn = SMCOpen();
+  return g_smcConn ? 0 : -1;
+}
+
+// getFanList reads current fan state without requiring initIOReport().
+// Returns the number of fans written into the output array.
+int getFanList(fan_info_t *fans, int maxFans) {
+  if (ensureSMCConn() != 0)
+    return 0;
+  return readFanInfo(fans, maxFans);
+}
+
 // Fan control functions
 //
 // setFanForceTest writes the Intel-era "Ftst" (force test) key. This key does
@@ -2138,14 +2592,14 @@ static int readFanInfo(fan_info_t *fans, int maxFans) {
 // best-effort — the actual manual control on Apple Silicon is F<n>Md=1 plus
 // F<n>Tg=<rpm>. It is still attempted for Intel Macs where it helps.
 int setFanForceTest(int enabled) {
-  if (!g_smcConn)
+  if (ensureSMCConn() != 0)
     return -1;
   float val = enabled ? 1.0f : 0.0f;
   return (SMCSetFloat(g_smcConn, "Ftst", val) == kIOReturnSuccess) ? 0 : -1;
 }
 
 int setFanMode(int fanIndex, int mode) {
-  if (!g_smcConn)
+  if (ensureSMCConn() != 0)
     return -1;
   char key[5];
   snprintf(key, sizeof(key), "F%dMd", fanIndex);
@@ -2154,7 +2608,7 @@ int setFanMode(int fanIndex, int mode) {
 }
 
 int setFanTarget(int fanIndex, int rpm) {
-  if (!g_smcConn)
+  if (ensureSMCConn() != 0)
     return -1;
 
   // Read bounds for clamping
@@ -2176,10 +2630,10 @@ int setFanTarget(int fanIndex, int rpm) {
 }
 
 int resetFansToAuto() {
-  if (!g_smcConn)
+  if (ensureSMCConn() != 0)
     return -1;
 
-  // Clear force test mode
+  // Clear force test mode (best-effort: Ftst is absent on Apple Silicon)
   setFanForceTest(0);
 
   // Read fan count
@@ -2187,11 +2641,13 @@ int resetFansToAuto() {
   if (SMCReadKey(g_smcConn, "FNum", &val) != kIOReturnSuccess)
     return -1;
 
+  int rc = 0;
   int fanCount = (unsigned char)val.bytes[0];
   for (int i = 0; i < fanCount && i < 8; i++) {
-    setFanMode(i, 0); // 0 = auto
+    if (setFanMode(i, 0) != 0) // 0 = auto
+      rc = -1;
   }
-  return 0;
+  return rc;
 }
 
 // Cached NVMe SMART temps — refreshed periodically, seeded by HID NAND fallback
@@ -2558,6 +3014,149 @@ static void readNVMeSMARTTemps(void) {
   }
 }
 
+// --- ANE activity fallback via IORegistry power state -----------------------
+// On M5 Max / macOS 27 the PMP performance-floor IOReport channels that mactop
+// derives ANE utilization from (ANE-AF-BW / ANE-DCS-BW) are EMPTY for a non-root
+// process — the whole PMP group returns 0 channels — so the normal aneActive
+// computation is stuck at a constant 0%. The Apple Neural Engine driver
+// (IOClass "H11ANEIn") publishes IOPowerManagement.CurrentPowerState in the
+// IORegistry: 0 when the ANE is idle/unpowered, 1 when it is powered for
+// inference. That property is readable without root, so sampling its duty cycle
+// across the measurement window gives a usable ANE activity estimate.
+//
+// MaxPowerState is 1 on current silicon (binary on/off), so this is a coarse
+// "fraction of the window the ANE was powered" signal rather than a fine-grained
+// load percentage; it reads ~100% during sustained on-device inference and 0%
+// at idle. The ANE power domain has a short cool-down tail (~5s on M5 Max) after
+// the last inference before it powers off, so the reading lingers near 100% for
+// a few seconds after activity stops — acceptable for a live monitor and far
+// better than the constant 0% it replaces. It is only used as a fallback when no
+// PMP ANE utilization channel is present (chips that expose PMP keep using the
+// higher-resolution floor-residency signal). No finer-grained non-root counter
+// exists: the ANE HAL / load-balancer IORegistry nodes carry only static device
+// info, and the PMP performance-floor channels are empty for non-root here.
+//
+// Ultra-class chips (M1/M2/M3 Ultra, etc.) fuse two dies and expose two
+// H11ANEIn driver-interface nodes (H11ANE + H11ANE1, NumANEs=2). Single-die
+// parts (M5 Max, M4 Pro, …) expose exactly one. Use the plural service lookup
+// and OR per-slice power state so either cluster being powered counts as active.
+static int collectAneServices(io_service_t *out, int maxOut) {
+  if (out == NULL || maxOut <= 0) return 0;
+
+  io_iterator_t iterator = 0;
+  io_object_t entry;
+  int count = 0;
+
+  CFMutableDictionaryRef matching = IOServiceMatching("H11ANEIn");
+  if (matching == NULL) return 0;
+  if (IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) !=
+      kIOReturnSuccess) {
+    return 0;
+  }
+
+  // Drain the whole iterator: store up to maxOut, release any beyond the cap.
+  // IOIteratorNext returns a +1 reference per entry, so stopping early (the cap
+  // is hit) would leak the over-cap entry the loop condition already fetched.
+  // Stored entries are released by the caller.
+  while ((entry = IOIteratorNext(iterator)) != 0) {
+    if (count < maxOut) {
+      out[count++] = entry;
+    } else {
+      IOObjectRelease(entry);
+    }
+  }
+  IOObjectRelease(iterator);
+  return count;
+}
+
+// Returns the ANE CurrentPowerState (>=0), or -1 if unavailable.
+static int readAnePowerState(io_service_t svc) {
+  if (svc == MACH_PORT_NULL) return -1;
+  CFTypeRef pm = IORegistryEntryCreateCFProperty(
+      svc, CFSTR("IOPowerManagement"), kCFAllocatorDefault, 0);
+  if (pm == NULL) return -1;
+  int state = -1;
+  if (CFGetTypeID(pm) == CFDictionaryGetTypeID()) {
+    CFNumberRef cur = (CFNumberRef)CFDictionaryGetValue(
+        (CFDictionaryRef)pm, CFSTR("CurrentPowerState"));
+    if (cur != NULL && CFGetTypeID(cur) == CFNumberGetTypeID()) {
+      int v = 0;
+      if (CFNumberGetValue(cur, kCFNumberIntType, &v)) state = v;
+    }
+  }
+  CFRelease(pm);
+  return state;
+}
+
+// Detect an exclave-based ANE driver (Apple H16+, e.g. M5 / M5 Max). These
+// publish IOExclaveProxy=Yes and IONameMatched "ane,*exclave". On exclave ANE
+// the IOPowerManagement.CurrentPowerState duty cycle is pinned high by
+// background macOS ML services, so it must be presented as a binary powered/idle
+// state rather than a percentage. Older non-exclave parts (M1..M4, Ultra dies)
+// return 0 here and keep their per-die duty-cycle %.
+static int aneServiceIsExclave(io_service_t svc) {
+  if (svc == MACH_PORT_NULL) return 0;
+  int isExclave = 0;
+  CFTypeRef proxy = IORegistryEntryCreateCFProperty(
+      svc, CFSTR("IOExclaveProxy"), kCFAllocatorDefault, 0);
+  if (proxy != NULL) {
+    if (CFGetTypeID(proxy) == CFBooleanGetTypeID())
+      isExclave = CFBooleanGetValue((CFBooleanRef)proxy) ? 1 : 0;
+    CFRelease(proxy);
+  }
+  if (!isExclave) {
+    CFTypeRef nm = IORegistryEntryCreateCFProperty(
+        svc, CFSTR("IONameMatched"), kCFAllocatorDefault, 0);
+    if (nm != NULL) {
+      if (CFGetTypeID(nm) == CFStringGetTypeID() &&
+          CFStringFind((CFStringRef)nm, CFSTR("exclave"),
+                       kCFCompareCaseInsensitive)
+                  .location != kCFNotFound)
+        isExclave = 1;
+      CFRelease(nm);
+    }
+  }
+  return isExclave;
+}
+
+// Sort key so H11ANE (die 0) precedes H11ANE1 (die 1) in per-cluster arrays.
+static int aneServiceSortKey(io_service_t svc) {
+  io_name_t name;
+  if (IORegistryEntryGetName(svc, name) != KERN_SUCCESS) return 99;
+  if (strcmp(name, "H11ANE") == 0) return 0;
+  if (strcmp(name, "H11ANE1") == 0) return 1;
+  return 50;
+}
+
+static void sortAneServicesByDie(io_service_t *svcs, int count) {
+  for (int i = 0; i < count - 1; i++) {
+    for (int j = i + 1; j < count; j++) {
+      if (aneServiceSortKey(svcs[j]) < aneServiceSortKey(svcs[i])) {
+        io_service_t tmp = svcs[i];
+        svcs[i] = svcs[j];
+        svcs[j] = tmp;
+      }
+    }
+  }
+}
+
+// Per-slice aggregate across all H11ANEIn nodes: 1 if any cluster is powered,
+// 0 if all readable nodes are idle, -1 if none are readable.
+static int readAnyAnePowered(io_service_t *svcs, int count) {
+  if (svcs == NULL || count <= 0) return -1;
+
+  int anyReadable = 0;
+  int anyPowered = 0;
+  for (int i = 0; i < count; i++) {
+    int st = readAnePowerState(svcs[i]);
+    if (st < 0) continue;
+    anyReadable = 1;
+    if (st >= 1) anyPowered = 1;
+  }
+  if (!anyReadable) return -1;
+  return anyPowered ? 1 : 0;
+}
+
 PowerMetrics samplePowerMetrics(int durationMs) {
   PowerMetrics metrics = {0};
 
@@ -2592,7 +3191,66 @@ PowerMetrics samplePowerMetrics(int durationMs) {
   if (sample1 == NULL)
     return metrics;
 
-  usleep(durationMs * 1000);
+  // Sample the ANE power-state duty cycle across the measurement window, in
+  // place of a single window sleep so it adds no extra latency. Used as the
+  // fallback ANE-activity signal when the PMP performance-floor channels are
+  // absent (M5 Max / macOS 27, non-root). anePowerStatePct < 0 => unavailable.
+  double anePowerStatePct = -1.0;
+  // Exclave ANE (M5 / M5 Max): power-state signal is binary-only. Recorded here
+  // but only surfaced (metrics.aneIsExclave) if the binary power-state fallback
+  // is actually used — i.e. no util-floor channel AND no bandwidth signal exist.
+  // That way a working ANE channel (e.g. metaspartan's combined RD+WR PMP path)
+  // keeps its real %/GB/s display instead of being overridden by ON/idle.
+  int aneExclaveDetected = 0;
+  {
+    io_service_t aneSvcs[MAX_ANE_SERVICES];
+    int aneSvcCount = collectAneServices(aneSvcs, MAX_ANE_SERVICES);
+    sortAneServicesByDie(aneSvcs, aneSvcCount);
+    for (int ai = 0; ai < aneSvcCount; ai++) {
+      if (aneServiceIsExclave(aneSvcs[ai])) {
+        aneExclaveDetected = 1;
+        break;
+      }
+    }
+    int slices = durationMs / 50; // ~50ms cadence (20 samples over a 1s window)
+    if (slices < 1) slices = 1;
+    useconds_t sliceUs = (useconds_t)((long)durationMs * 1000 / slices);
+    int samples = 0, powered = 0;
+    int perSamples[MAX_ANE_SERVICES] = {0};
+    int perPowered[MAX_ANE_SERVICES] = {0};
+    for (int si = 0; si < slices; si++) {
+      if (aneSvcCount > 0) {
+        int st = readAnyAnePowered(aneSvcs, aneSvcCount);
+        if (st >= 0) {
+          samples++;
+          if (st >= 1) powered++;
+        }
+        for (int ai = 0; ai < aneSvcCount; ai++) {
+          int nodeSt = readAnePowerState(aneSvcs[ai]);
+          if (nodeSt >= 0) {
+            perSamples[ai]++;
+            if (nodeSt >= 1) perPowered[ai]++;
+          }
+        }
+      }
+      usleep(sliceUs);
+    }
+    metrics.aneClusterCount = aneSvcCount;
+    for (int ci = 0; ci < MAX_ANE_SERVICES; ci++) {
+      metrics.aneClusterActive[ci] = -1.0;
+    }
+    for (int ci = 0; ci < aneSvcCount && ci < MAX_ANE_SERVICES; ci++) {
+      if (perSamples[ci] > 0) {
+        metrics.aneClusterActive[ci] =
+            (double)perPowered[ci] / (double)perSamples[ci] * 100.0;
+      }
+    }
+    for (int ai = 0; ai < aneSvcCount; ai++) {
+      if (aneSvcs[ai] != MACH_PORT_NULL) IOObjectRelease(aneSvcs[ai]);
+    }
+    if (samples > 0)
+      anePowerStatePct = (double)powered / (double)samples * 100.0;
+  }
 
   CFDictionaryRef sample2 =
       IOReportCreateSamples(g_subscription, g_channels, NULL);
@@ -2675,7 +3333,13 @@ PowerMetrics samplePowerMetrics(int durationMs) {
   double dramNamedEnergyW = 0; // "DRAM Energy"-style aggregates
   int64_t pmpAneReadBytes = 0;
   int64_t pmpAneWriteBytes = 0;
+  int64_t pmpAneCombinedBytes = 0; // combined "ANE RD+WR" (chips without split RD/WR)
   bool sawAnePmpActivity = false;  // any positive residency on ANE* PMP channels (macOS 27+)
+  bool sawAneUtilChannel = false;  // a usable PMP ANE floor/util channel was present at all
+  PmpKeyedMax aneBw[PMP_KEYED_MAX];
+  int aneBwCount = 0;
+  PmpKeyedMax pmpCpu[PMP_KEYED_MAX];
+  int pmpCpuCount = 0;
 
   for (CFIndex i = 0; i < count; i++) {
     CFDictionaryRef item = (CFDictionaryRef)CFArrayGetValueAtIndex(channels, i);
@@ -2972,13 +3636,17 @@ PowerMetrics samplePowerMetrics(int durationMs) {
         amcRequestWriteBytes += val;
         hasAmcRequestBytes = 1;
       }
-    } else if (strcmp(grp, "PMP") == 0) {
+    } else if (isPMPGroup(grp)) {
       // PMP can provide DRAM bandwidth on systems where AMC Stats channels are
       // absent or do not produce delta data.
       char sub[64] = {0};
       CFStringRef subgroupRef = IOReportChannelGetSubGroup(item);
       if (subgroupRef != NULL) {
         CFStringGetCString(subgroupRef, sub, sizeof(sub), kCFStringEncodingUTF8);
+      }
+      if (isPmpCpuPowerChannel(sub, chn) && IOReportStateGetCount(item) > 1) {
+        pmpKeyedMaxRecord(pmpCpu, &pmpCpuCount, grp, chn,
+                          stateBinAverage(item, true), 0);
       }
       if (strcmp(sub, "DRAM BW") == 0) {
         int64_t val = IOReportSimpleGetIntegerValue(item, 0);
@@ -2989,6 +3657,30 @@ PowerMetrics samplePowerMetrics(int durationMs) {
             pmpDramReadBytes += val;
           } else if (amcChannelDirection(chn) == 2) {
             pmpDramWriteBytes += val;
+          }
+        }
+      }
+      // M4 Pro / M4 Max: PMP "DCS BW" / "AMCC RD|WR|RD+WR" are 32-bucket
+      // rate histograms ("  16GB/s".."512GB/s"), not byte accumulators.
+      // IOReportSimpleGetIntegerValue returns INT64_MIN on them. AMCC is
+      // the memory-controller aggregate — do not sum PACC/EACC/AGX agent
+      // histograms or they double-count. Bucket 0 is an underflow bin
+      // (histogramAvgGBs counts it as 0), otherwise idle is a phantom
+      // 16 GB/s. max, not +=, in case a PMP re-merge duplicates the channel.
+      if (isAmccDcsBwChannel(sub, chn)) {
+        double avgGBs = histogramAvgGBs(item);
+        if (avgGBs >= 0.0) {
+          int64_t bytes = histogramBytesOverWindow(
+              avgGBs, durationMs, metrics.actualDurationNs);
+          if (strcmp(chn, "AMCC RD+WR") == 0) {
+            if (bytes > pmpDramCombinedBytes)
+              pmpDramCombinedBytes = bytes;
+          } else if (strcmp(chn, "AMCC RD") == 0) {
+            if (bytes > pmpDramReadBytes)
+              pmpDramReadBytes = bytes;
+          } else if (strcmp(chn, "AMCC WR") == 0) {
+            if (bytes > pmpDramWriteBytes)
+              pmpDramWriteBytes = bytes;
           }
         }
       }
@@ -3021,17 +3713,14 @@ PowerMetrics samplePowerMetrics(int durationMs) {
         }
         int32_t stateCount = IOReportStateGetCount(item);
 
-        bool isAneFloorChannel =
-            (strcmp(chn, "ANE-AF-BW") == 0 || strcmp(chn, "ANE-DCS-BW") == 0) &&
-            strstr(sub, "Floor") != NULL;
-        bool isAneEngineStateChannel = (strcmp(chn, "ANE0") == 0) &&
-          (strstr(sub, "Floor") != NULL || strstr(sub, "Fast-Die") != NULL ||
-           strstr(sub, "CE") != NULL || strstr(sub, "SOC") != NULL || strstr(sub, "Util") != NULL);
+        bool isAneFloorChannel = isAneFloorChannelName(chn, sub);
+        bool isAneEngineStateChannel = isAneEngineStateChannelName(chn, sub);
 
         // Utilization %: time NOT spent in the idle/floor state, from actual
         // residency deltas. Idle states: OFF/IDLE/DOWN/SLEEP plus the lowest
-        // floor request (VMIN for SOC Floor, F1 for DCS Floor, 0% for Fast-Die CE).
+        // floor request (VMIN for SOC Floor, F1 for DCS Floor — F2 on M6 — 0% for Fast-Die CE).
         if (stateCount > 1 && (isAneFloorChannel || isAneEngineStateChannel)) {
+          sawAneUtilChannel = true; // PMP exposes a real ANE util signal here
           int64_t totalTime = 0;
           int64_t activeTime = 0;
           for (int32_t s = 0; s < stateCount; s++) {
@@ -3043,7 +3732,7 @@ PowerMetrics samplePowerMetrics(int durationMs) {
               CFStringGetCString(stateName, sn, sizeof(sn), kCFStringEncodingUTF8);
               if (strcmp(sn, "OFF") != 0 && strcmp(sn, "IDLE") != 0 &&
                   strcmp(sn, "DOWN") != 0 && strcmp(sn, "SLEEP") != 0 &&
-                  strcmp(sn, "VMIN") != 0 && strcmp(sn, "F1") != 0 &&
+                  strcmp(sn, "VMIN") != 0 && strcmp(sn, "F1") != 0 && strcmp(sn, "F2") != 0 &&
                   strcmp(sn, "0%") != 0) {
                 activeTime += residency;
               }
@@ -3063,26 +3752,20 @@ PowerMetrics samplePowerMetrics(int durationMs) {
         // ANE bandwidth: residency-weighted average of the "AF BW" rate
         // histogram buckets (bucket names parse as "<N>GB/s"), converted to
         // bytes over this window. Only "AF BW" is used ("DCS BW" mirrors it
-        // and would double count); "RD+WR" is skipped (sum of RD and WR).
-        // The histogram only ticks while the ANE is powered, so this is the
-        // average rate while powered — at idle the total is 0 and we report 0.
+        // and would double count).
+        //
+        // Channel layout varies by chip: some expose separate "ANE0 RD" /
+        // "ANE0 WR" histograms, others expose ONLY the combined "ANE0 RD+WR".
+        // M1/M2/M3/M4 read exact bytes from AMC so this PMP path is unused on
+        // them, but on chips where AMC ANE counters are kernel-blocked (M5+,
+        // and M-series Ultra/Max variants on macOS 27) this is the sole ANE
+        // bandwidth source. Previously the combined "RD+WR" channel was
+        // skipped entirely, so those chips reported 0 GB/s (and 0% ANE) even
+        // under full Foundation Models load — handle it as the combined total.
         if (stateCount > 1 && strcmp(sub, "AF BW") == 0 &&
-            strstr(chn, "RD+WR") == NULL &&
-            (strstr(chn, "RD") != NULL || strstr(chn, "WR") != NULL)) {
-          int64_t tot = 0;
-          double weighted = 0;
-          for (int32_t s = 0; s < stateCount; s++) {
-            int64_t residency = IOReportStateGetResidency(item, s);
-            tot += residency;
-            CFStringRef stateName = IOReportStateGetNameForIndex(item, s);
-            if (stateName != NULL && residency > 0) {
-              char sn[64] = {0};
-              CFStringGetCString(stateName, sn, sizeof(sn), kCFStringEncodingUTF8);
-              weighted += atof(sn) * (double)residency; // "32GB/s" -> 32.0
-            }
-          }
-          if (tot > 0) {
-            double avgGBs = weighted / (double)tot;
+            isAneBwDirectionChannel(chn)) {
+          double avgGBs = stateBinAverage(item, false);
+          if (avgGBs > 0) {
             // Scale by the measured sample window (actualDurationNs), not the
             // requested durationMs: Go divides these bytes by the measured
             // window to recover GB/s, so using the same interval here makes
@@ -3092,20 +3775,24 @@ PowerMetrics samplePowerMetrics(int durationMs) {
                                    ? (double)metrics.actualDurationNs / 1e9
                                    : (double)durationMs / 1000.0;
             int64_t bytes = (int64_t)(avgGBs * 1e9 * sampleSec);
-            // max, not +=: there is exactly one RD and one WR channel in
-            // "AF BW", but the channel may appear more than once in a merged
-            // subscription — summing would double count.
-            if (strstr(chn, "RD") != NULL) {
-              if (bytes > pmpAneReadBytes) pmpAneReadBytes = bytes;
-            } else {
-              if (bytes > pmpAneWriteBytes) pmpAneWriteBytes = bytes;
-            }
+            // Single-die chips have one channel per direction; Ultra has one
+            // per die and link ("ANE0 L0 RD", "ANE1 L1 RD", ...), which sum.
+            // A channel may also appear more than once in a merged
+            // subscription, so keep the max per distinct group/name.
+            // "RD+WR" is the combined total (kept apart so it isn't mistaken
+            // for read-only).
+            pmpKeyedMaxRecord(aneBw, &aneBwCount, grp, chn, (double)bytes,
+                              aneBwKind(chn));
             sawAnePmpActivity = true;
           }
         }
       }
     }
   }
+  pmpAneReadBytes += (int64_t)pmpKeyedMaxSum(aneBw, aneBwCount, ANE_BW_READ);
+  pmpAneWriteBytes += (int64_t)pmpKeyedMaxSum(aneBw, aneBwCount, ANE_BW_WRITE);
+  pmpAneCombinedBytes +=
+      (int64_t)pmpKeyedMaxSum(aneBw, aneBwCount, ANE_BW_COMBINED);
 
   // Post-loop: assign accumulated CPU cluster metrics to final metrics.
   // On M5+ chips (mClusterCount > 0): MCPU = Performance (pCluster), PCPU = Super (sCluster).
@@ -3137,6 +3824,17 @@ PowerMetrics samplePowerMetrics(int durationMs) {
   // Prefer whole-CPU energy totals; fall back to the sum of cluster-type
   // channels when only those exist (newer chip/OS naming generations).
   metrics.cpuPower = (cpuTotalEnergyW > 0) ? cpuTotalEnergyW : cpuTypedEnergyW;
+  // macOS 27 gates the Energy Model CPU counters: they read 0, and only
+  // advance while an entitled sampler (powermetrics, Activity Monitor) runs,
+  // over partial windows. The first sample that reads 0 while the PMP
+  // per-cluster histograms show CPU power latches the PMP source for good,
+  // so CPU watts don't flap between the two. Where the counters work they
+  // never read 0 under load, so the latch never trips.
+  double pmpCpuW = pmpKeyedMaxSum(pmpCpu, pmpCpuCount, 0);
+  if (metrics.cpuPower <= 0 && pmpCpuW > 0)
+    g_energyModelCpuGated = true;
+  if (g_energyModelCpuGated)
+    metrics.cpuPower = pmpCpuW;
   // GPU: "GPU Energy" is the canonical channel; the bare "GPU" alias is used
   // only when the canonical one produced nothing.
   metrics.gpuPower += (gpuEnergyNamedW > 0) ? gpuEnergyNamedW : gpuEnergyAliasW;
@@ -3144,6 +3842,15 @@ PowerMetrics samplePowerMetrics(int durationMs) {
   // aggregate "... Energy" aliases apply only when no block produced data.
   metrics.anePower += (aneBlockEnergyW > 0) ? aneBlockEnergyW : aneNamedEnergyW;
   metrics.dramPower += (dramBlockEnergyW > 0) ? dramBlockEnergyW : dramNamedEnergyW;
+  // Same gating as the CPU counters above: latch the SMC DRAM keys on the
+  // first sample where the Energy Model reads 0 but SMC shows DRAM power.
+  if (g_smcConn) {
+    double smcDramW = readDramPower(g_smcConn);
+    if (metrics.dramPower <= 0 && smcDramW > 0)
+      g_energyModelDramGated = true;
+    if (g_energyModelDramGated)
+      metrics.dramPower = smcDramW;
+  }
 
   if (hasAmcExactDcsDirectional) {
     metrics.dramReadBytes = amcExactDcsReadBytes;
@@ -3211,14 +3918,28 @@ PowerMetrics samplePowerMetrics(int durationMs) {
       !g_direct_dram_bw_available || g_dram_bw_fallback_enabled;
 
   // Fallback: use PMP DRAM BW data when AMC Stats produces no bandwidth data.
+  // Prefer the AMCC RD+WR histogram for combined GB/s. AMCC RD and AMCC WR
+  // have independent underflow bins, so summing them can still disagree
+  // with combined; scale them to the combined histogram when it is present.
+  // Go reconstructs combined as (read+write)/interval.
   if (allowDramFallback &&
       metrics.dramReadBytes == 0 && metrics.dramWriteBytes == 0) {
-    metrics.dramReadBytes = pmpDramReadBytes;
-    metrics.dramWriteBytes = pmpDramWriteBytes;
-    if (metrics.dramReadBytes == 0 && metrics.dramWriteBytes == 0 &&
-        pmpDramCombinedBytes > 0) {
-      metrics.dramReadBytes = pmpDramCombinedBytes / 2;
-      metrics.dramWriteBytes = pmpDramCombinedBytes - metrics.dramReadBytes;
+    if (pmpDramCombinedBytes > 0) {
+      int64_t rd = pmpDramReadBytes;
+      int64_t wr = pmpDramWriteBytes;
+      if (rd + wr <= 0) {
+        rd = pmpDramCombinedBytes / 2;
+        wr = pmpDramCombinedBytes - rd;
+      } else {
+        double scale = (double)pmpDramCombinedBytes / (double)(rd + wr);
+        rd = (int64_t)(rd * scale);
+        wr = pmpDramCombinedBytes - rd;
+      }
+      metrics.dramReadBytes = rd;
+      metrics.dramWriteBytes = wr;
+    } else {
+      metrics.dramReadBytes = pmpDramReadBytes;
+      metrics.dramWriteBytes = pmpDramWriteBytes;
     }
   }
 
@@ -3240,9 +3961,33 @@ PowerMetrics samplePowerMetrics(int durationMs) {
   if (amcAneReadBytes + amcAneWriteBytes > 0) {
     metrics.aneReadBytes = amcAneReadBytes;
     metrics.aneWriteBytes = amcAneWriteBytes;
-  } else {
+  } else if (pmpAneReadBytes + pmpAneWriteBytes > 0) {
+    // PMP exposes a separate RD and WR histogram (preserves the split).
     metrics.aneReadBytes = pmpAneReadBytes;
     metrics.aneWriteBytes = pmpAneWriteBytes;
+  } else {
+    // PMP exposes only the combined "ANE RD+WR" histogram (M5+/Ultra/Max on
+    // macOS 27, where AMC ANE byte counters are kernel-blocked). Report it as
+    // the read figure with no split — the combined total drives the gauge and
+    // utilization correctly, which is what matters; a fabricated 50/50 split
+    // would be misleading.
+    metrics.aneReadBytes = pmpAneCombinedBytes;
+    metrics.aneWriteBytes = 0;
+  }
+
+  // ANE utilization fallback (M5 Max / macOS 27): when no PMP ANE floor/util
+  // channel was present AND no ANE bandwidth (AMC or PMP RD/WR/RD+WR) is
+  // available, aneActive would be stuck at 0% even under on-device inference.
+  // Substitute the H11ANE driver's IOPowerManagement power-state duty cycle
+  // sampled across the window (see collectAneServices). Any working channel —
+  // including the combined RD+WR PMP bandwidth path — takes precedence so its
+  // real %/GB-s display is kept (maintainer preference for layout 19), and the
+  // exclave binary ON/idle treatment only applies in this last-resort case.
+  bool haveAneBandwidth = (metrics.aneReadBytes + metrics.aneWriteBytes) > 0;
+  if (!sawAneUtilChannel && !haveAneBandwidth && anePowerStatePct >= 0.0) {
+    metrics.aneActive = anePowerStatePct;
+    metrics.aneIsPowerState = 1; // signal the UI to label this "powered", not a %
+    metrics.aneIsExclave = aneExclaveDetected; // binary ON/idle only here
   }
 
   // Fallback: estimate DRAM BW from DRAM power after local calibration.
@@ -3297,7 +4042,7 @@ PowerMetrics samplePowerMetrics(int durationMs) {
   // This avoids a redundant HID service enumeration on systems where HID provides good data.
 
   if (g_smcConn) {
-    metrics.systemPower = SMCGetFloatValue(g_smcConn, "PSTR");
+    metrics.systemPower = readSystemPower(g_smcConn);
   }
 
   // Read fan data

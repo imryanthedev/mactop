@@ -32,6 +32,13 @@ TUI_ECPUUsage = "E-CPU使用率"
 TUI_PCPUUsage = "P-CPU使用率"
 TUI_GPUUsage = "GPU使用率"
 TUI_MemoryUsage = "メモリ使用率"
+TUI_MemoryPressure = "メモリ圧力"
+TUI_MemoryPressureHistory = "メモリ圧力の履歴"
+Metrics_MemPressureGauge = "圧力: %s (%.0f)"
+Metrics_MemPressurePanel = "状態: %s\nレベル: %d\n概算: %.0f\n圧縮: %.1f GB"
+Metrics_MemPressureHistoryDetail = "圧力: %s (%.0f)"
+Info_MemoryPressure = "メモリ圧力"
+Info_MemoryPressureValue = "%s (レベル %d、概算 %.0f)"
 TUI_ANEUsage = "ANE使用率"
 TUI_PowerUsage = "電力使用量"
 TUI_NetworkDisk = "ネットワークとディスク"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "メモリ"
 Process_TIME = "時間"
 Process_CMD = "コマンド"
-
+Port_PORT = "ポート"
+Port_PROTO = "プロト"
+Port_BIND = "バインド"
+Port_PID = "PID"
+Port_USER = "ユーザー"
+Port_ESTAB = "接続"
+Port_CMD = "コマンド"
+TUI_PortsListFull = "ポート (↑/↓ スクロール, / 検索, e 外部のみ, f 停止, F9 終了)"
+TUI_PortsListFrozen = " ポート [停止中] (f で再開) "
+TUI_PortsListSearch = " ポート検索: %s_ (Esc でクリア) "
+TUI_PortsListKill = " ポート - 終了の確認 (PID %d) "
+TUI_PortsListExternal = " ポート [外部のみ] (e すべて, / 検索, F9 終了) "
 TUI_ProcessListFull = "プロセスリスト (↑/↓ スクロール, / 検索, f 停止, F9 終了)"
 TUI_ProcessListFrozen = " プロセスリスト [停止中] (fで再開) "
 TUI_ProcessListSearch = " 検索: %s_ (Escでクリア) "
@@ -263,6 +281,10 @@ CLI_HelpText = """
       --overlay-sections  表示するセクションをカンマ区切りで指定 (例: cpu,gpu,memory,power)
       --overlay-opacity   オーバーレイの透明度、0.15-1.0 (デフォルト: 0.88)
       --fan-control       インタラクティブなファン制御を有効化 (SMC に書き込み)
+      --fan-set <value>   ファン速度を設定して終了: RPM、パーセント (60%)、min、max、auto (sudo が必要)
+      --fan-id <n>        --fan-set を単一のファン ID に適用 (デフォルト: すべてのファン)
+      --fan-auto          ファンの自動制御を復元して終了 (sudo が必要)
+      --fan-status        ファンの状態を JSON で出力して終了
       --dump-temps        診断: 生の SMC 温度キーをすべて出力して終了
       --dump-debug        診断: IOReport/HID/SMC/NVMe のデバッグ情報を出力して終了
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (平均 %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "読 %s/s 書 %s/s"
 Info_DRAMBWValue = "読 %.1f / 書 %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s 空き)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ ファン制御有効](fg:red,mod:bold)  [+/-](fg:%s,m
 Fan_ReadOnly = "[読み取り専用](fg:%s)  書き込みを有効にするには --fan-control を使用  |  [l](fg:%s,mod:bold) レイアウト  [F](fg:%s,mod:bold) ファン表示を終了"
 Fan_NeedsRoot = "[⚠ ファン制御には root が必要です — 再起動: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ 直近の書き込みは無効でした (OS が拒否)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "エラー: ファン制御の書き込みには root が必要です — 実行: sudo mactop %s"
+FanCLI_WriteFailed = "エラー: ファン制御の書き込みに失敗しました: %v"
+FanCLI_InvalidValue = "エラー: --fan-set の値 '%s' が無効です — RPM 数値、60%% のようなパーセント、min、max、auto を使用してください"
+FanCLI_UnknownFan = "エラー: ID %d のファンがありません (検出されたファン: %d)"
+FanCLI_NoMaxRPM = "エラー: ファンが最大 RPM を報告していません — パーセント/max ではなく絶対 RPM 値を使用してください"
+FanCLI_FanPinned = "ファン %d を %d RPM に固定しました (手動モード)"
+FanCLI_AutoRestored = "すべてのファンを自動制御に戻しました"
+FanCLI_ManualWarning = "⚠ mactop 終了後もファンは手動モードのままです — 自動制御に戻すには: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "警告: SMC は書き込みを受け付けましたが、ファンの状態は変わりませんでした — OS が上書きした可能性があります"
 
 Metrics_PowerSparklineGroup = "%.2f W 合計 (最大: %.2f W)"
 Metrics_PowerSparklineTitle = "平均 %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "充電中"
 Info_BatteryDischarging = "バッテリー駆動"
 Info_BatteryAC = "AC電源"
+Info_PowerSupply = "電源"
 
 TUI_MemoryBandwidthHistory = "メモリ帯域幅の履歴"
 Metrics_MemBWHistoryDetail = "DRAM帯域幅: %.1f GB/s"

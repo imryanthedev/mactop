@@ -45,6 +45,7 @@ var themeOrder = []string{
 	"frappe",
 	"macchiato",
 	"mocha",
+	"dracula",
 }
 
 // colorMap maps theme names to their primary UI color
@@ -82,6 +83,7 @@ var colorMap = map[string]ui.Color{
 	"frappe":    CatppuccinFrappe.Mauve,
 	"macchiato": CatppuccinMacchiato.Sapphire,
 	"mocha":     CatppuccinMocha.Peach,
+	"dracula":   Dracula.Purple,
 }
 
 // bgColorOrder defines the order backgrounds cycle through with 'b' key
@@ -93,6 +95,7 @@ var bgColorOrder = []string{
 	"mocha-crust",
 	"macchiato-base",
 	"frappe-base",
+	"dracula-base",
 	"deep-space",
 	"white",
 	"grey",
@@ -107,6 +110,7 @@ var bgColorMap = map[string]ui.Color{
 	"mocha-crust":    CatppuccinMocha.Crust,
 	"macchiato-base": CatppuccinMacchiato.Base,
 	"frappe-base":    CatppuccinFrappe.Base,
+	"dracula-base":   Dracula.Background,
 	"deep-space":     rgb(13, 13, 19),
 	"white":          ui.ColorWhite,
 	"grey":           rgb(54, 54, 54),
@@ -128,9 +132,20 @@ func IsCatppuccinTheme(theme string) bool {
 	return slices.Contains(catppuccinThemes, theme)
 }
 
-// 1977 theme uses fixed per-component gauge colors regardless of cycle position
+// IsPaletteTheme returns true if the theme ships a full colour palette
+func IsPaletteTheme(theme string) bool {
+	return IsCatppuccinTheme(theme) || IsDraculaTheme(theme)
+}
 
-// --- Style helpers: centralize the repeated 3-5 line styling patterns ---
+// GetPaletteHex returns a named colour from whichever palette the theme belongs to
+func GetPaletteHex(theme, colorName string) string {
+	if IsDraculaTheme(theme) {
+		return GetDraculaHex(colorName)
+	}
+	return GetCatppuccinHex(theme, colorName)
+}
+
+// 1977 theme uses fixed per-component gauge colors regardless of cycle position
 
 func styleGauge(g *w.Gauge, color, labelColor ui.Color) {
 	if g == nil {
@@ -205,6 +220,13 @@ func applyCatppuccinThemeToGauges(palette *CatppuccinPalette) {
 	styleGauge(aneGauge, palette.Lavender, palette.Subtext0)  // ANE = Lavender (AI/neural)
 }
 
+func applyDraculaThemeToGauges(palette *DraculaPalette) {
+	styleGauge(cpuGauge, palette.Green, palette.Comment)
+	styleGauge(gpuGauge, palette.Cyan, palette.Comment)
+	styleGauge(memoryGauge, palette.Yellow, palette.Comment)
+	styleGauge(aneGauge, palette.Purple, palette.Comment)
+}
+
 // resolveCustomColor resolves a per-component hex color, falling back to foregroundColor.
 func resolveCustomColor(specificKey string, foregroundColor ui.Color) ui.Color {
 	if specificKey != "" && IsHexColor(specificKey) {
@@ -277,6 +299,7 @@ func applyCustomWidgetColors(theme *CustomThemeConfig, fgColor ui.Color) {
 	styleStepChart(powerHistoryChart, powerColor)
 	styleStepChart(memoryHistoryChart, resolveCustomColor(theme.Memory, fgColor))
 	styleStepChart(memBWHistoryChart, resolveCustomColor(theme.Memory, fgColor))
+	styleStepChart(memoryPressureHistoryChart, resolveCustomColor(theme.Memory, fgColor))
 	styleStepChart(cpuHistoryChart, resolveCustomColor(theme.CPU, fgColor))
 	styleStepChart(aneHistoryChart, resolveCustomColor(theme.ANE, fgColor))
 	bwColor := resolveCustomColor(theme.Bandwidth, fgColor)
@@ -296,6 +319,8 @@ func applyCustomWidgetColors(theme *CustomThemeConfig, fgColor ui.Color) {
 	styleParagraph(infoParagraph, fgColor) // info box uses foreground directly
 	styleParagraph(helpText, fgColor)
 	styleParagraph(modelText, resolveCustomColor(theme.SystemInfo, fgColor))
+	styleParagraph(memoryPressurePanel, resolveCustomColor(theme.Memory, fgColor))
+	styleGauge(memoryPressureGauge, resolveCustomColor(theme.Memory, fgColor), SecondaryTextColor)
 
 	// Process list (needs special selected-style contrast logic)
 	if processList != nil {
@@ -347,7 +372,7 @@ func applyThemeToSparklines(color ui.Color) {
 }
 
 func applyThemeToStepCharts(color ui.Color) {
-	for _, sc := range []*w.StepChart{gpuHistoryChart, powerHistoryChart, memoryHistoryChart, memBWHistoryChart, cpuHistoryChart, aneHistoryChart, bandwidthHistoryChart, socPowerHistoryChart, ssdReadHistoryChart} {
+	for _, sc := range []*w.StepChart{gpuHistoryChart, powerHistoryChart, memoryHistoryChart, memBWHistoryChart, memoryPressureHistoryChart, cpuHistoryChart, aneHistoryChart, bandwidthHistoryChart, socPowerHistoryChart, ssdReadHistoryChart} {
 		styleStepChart(sc, color)
 	}
 }
@@ -374,6 +399,8 @@ func applyThemeToWidgets(color ui.Color, lightMode bool) {
 	styleParagraph(helpText, color)
 	styleParagraph(tbInfoParagraph, color)
 	styleParagraph(infoParagraph, color)
+	styleParagraph(memoryPressurePanel, color)
+	styleGauge(memoryPressureGauge, color, SecondaryTextColor)
 
 	// CPU Cores widget
 	if cpuCoreWidget != nil {
@@ -482,6 +509,36 @@ func applyCatppuccinFullTheme(colorName string, palette *CatppuccinPalette, ligh
 	}
 }
 
+// applyDraculaFullTheme applies the Dracula theme with all widgets
+func applyDraculaFullTheme(palette *DraculaPalette, lightMode bool) {
+	primaryColor := palette.Purple
+
+	ui.Theme.Block.Title.Fg = primaryColor
+	ui.Theme.Block.Border.Fg = primaryColor
+	ui.Theme.Paragraph.Text.Fg = palette.Foreground
+	ui.Theme.Gauge.Label.Fg = palette.Comment
+	ui.Theme.BarChart.Bars = []ui.Color{palette.Cyan}
+
+	applyDraculaThemeToGauges(palette)
+	applyThemeToSparklines(primaryColor)
+	applyThemeToStepCharts(primaryColor)
+	applyThemeToWidgets(primaryColor, lightMode)
+
+	if mainBlock != nil {
+		mainBlock.BorderStyle.Fg = primaryColor
+		mainBlock.TitleStyle.Fg = primaryColor
+		mainBlock.TitleBottomStyle.Fg = primaryColor
+	}
+	if processList != nil {
+		processList.TextStyle = ui.NewStyle(primaryColor, CurrentBgColor)
+		processList.SelectedStyle = ui.NewStyle(palette.Background, primaryColor)
+		processList.BorderStyle.Fg = primaryColor
+		processList.BorderStyle.Bg = CurrentBgColor
+		processList.TitleStyle.Fg = primaryColor
+		processList.TitleStyle.Bg = CurrentBgColor
+	}
+}
+
 func applyTheme(colorName string, lightMode bool) {
 	color, resolvedName := resolveThemeColor(colorName)
 	currentConfig.Theme = resolvedName
@@ -493,6 +550,11 @@ func applyTheme(colorName string, lightMode bool) {
 		applyThemeToSparklines(color)
 		applyThemeToStepCharts(color)
 		applyThemeToWidgets(color, lightMode)
+		return
+	}
+
+	if palette := GetDraculaPalette(resolvedName); palette != nil {
+		applyDraculaFullTheme(palette, lightMode)
 		return
 	}
 
@@ -576,14 +638,14 @@ func GetProcessTextColor(isCurrentUser bool) string {
 			if color == ui.NewRGBColor(2, 2, 2) {
 				return "#020202"
 			}
-			if IsCatppuccinTheme(currentConfig.Theme) {
-				return GetCatppuccinHex(currentConfig.Theme, "Text")
+			if IsPaletteTheme(currentConfig.Theme) {
+				return GetPaletteHex(currentConfig.Theme, "Text")
 			}
 			return resolveThemeColorString(currentConfig.Theme)
 		}
 
-		if IsCatppuccinTheme(currentConfig.Theme) {
-			return GetCatppuccinHex(currentConfig.Theme, "Primary")
+		if IsPaletteTheme(currentConfig.Theme) {
+			return GetPaletteHex(currentConfig.Theme, "Primary")
 		}
 		return resolveThemeColorString(currentConfig.Theme)
 	}
@@ -716,7 +778,7 @@ func applyBackgroundToBlocks(bgColor ui.Color) {
 }
 
 func applyBackgroundToGauges(bgColor ui.Color) {
-	gauges := []*w.Gauge{cpuGauge, gpuGauge, memoryGauge, aneGauge}
+	gauges := []*w.Gauge{cpuGauge, gpuGauge, memoryGauge, aneGauge, memoryPressureGauge}
 	for _, g := range gauges {
 		if g != nil {
 			g.BackgroundColor = bgColor
@@ -728,7 +790,7 @@ func applyBackgroundToGauges(bgColor ui.Color) {
 }
 
 func applyBackgroundToParagraphs(bgColor ui.Color) {
-	paragraphs := []*w.Paragraph{PowerChart, NetworkInfo, modelText, helpText, tbInfoParagraph, infoParagraph}
+	paragraphs := []*w.Paragraph{PowerChart, NetworkInfo, modelText, helpText, tbInfoParagraph, infoParagraph, memoryPressurePanel}
 	for _, p := range paragraphs {
 		if p != nil {
 			p.BackgroundColor = bgColor
@@ -760,7 +822,7 @@ func applyBackgroundToSparklines(bgColor ui.Color) {
 }
 
 func applyBackgroundToStepCharts(bgColor ui.Color) {
-	stepCharts := []*w.StepChart{gpuHistoryChart, powerHistoryChart, memoryHistoryChart, memBWHistoryChart, cpuHistoryChart, aneHistoryChart, bandwidthHistoryChart, socPowerHistoryChart, ssdReadHistoryChart}
+	stepCharts := []*w.StepChart{gpuHistoryChart, powerHistoryChart, memoryHistoryChart, memBWHistoryChart, memoryPressureHistoryChart, cpuHistoryChart, aneHistoryChart, bandwidthHistoryChart, socPowerHistoryChart, ssdReadHistoryChart}
 	for _, sc := range stepCharts {
 		if sc != nil {
 			sc.BackgroundColor = bgColor

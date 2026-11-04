@@ -61,6 +61,9 @@ io_connect_t SMCOpen(void);
 kern_return_t SMCClose(io_connect_t conn);
 kern_return_t SMCReadKey(io_connect_t conn, const char *key, SMCKeyData_t *val);
 double SMCGetFloatValue(io_connect_t conn, const char *key);
+int SMCKeyTypeIsScaled(io_connect_t conn, const char *key);
+kern_return_t SMCGetKeyTypeString(io_connect_t conn, const char *key, char *out,
+                                  unsigned int outLen);
 int SMCGetKeyCount(io_connect_t conn);
 kern_return_t SMCGetKeyFromIndex(io_connect_t conn, int index, char *outputKey);
 kern_return_t SMCGetKeyInfo(io_connect_t conn, const char *key,

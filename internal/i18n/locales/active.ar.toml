@@ -32,6 +32,13 @@ TUI_ECPUUsage = "استخدام E-CPU"
 TUI_PCPUUsage = "استخدام P-CPU"
 TUI_GPUUsage = "استخدام GPU"
 TUI_MemoryUsage = "استخدام الذاكرة"
+TUI_MemoryPressure = "ضغط الذاكرة"
+TUI_MemoryPressureHistory = "سجل ضغط الذاكرة"
+Metrics_MemPressureGauge = "الضغط: %s (%.0f)"
+Metrics_MemPressurePanel = "الحالة: %s\nالمستوى: %d\nتقريبي: %.0f\nالمضغوط: %.1f GB"
+Metrics_MemPressureHistoryDetail = "الضغط: %s (%.0f)"
+Info_MemoryPressure = "ضغط الذاكرة"
+Info_MemoryPressureValue = "%s (المستوى %d، تقريبًا %.0f)"
 TUI_ANEUsage = "استخدام ANE"
 TUI_PowerUsage = "استهلاك الطاقة"
 TUI_NetworkDisk = "الشبكة والقرص"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "ذاكرة"
 Process_TIME = "الوقت"
 Process_CMD = "الأمر"
-
+Port_PORT = "منفذ"
+Port_PROTO = "بروتو"
+Port_BIND = "ربط"
+Port_PID = "PID"
+Port_USER = "مستخدم"
+Port_ESTAB = "اتصال"
+Port_CMD = "الأمر"
+TUI_PortsListFull = "المنافذ (↑/↓ تمرير، / بحث، e خارجي، f تجميد، F9 إنهاء)"
+TUI_PortsListFrozen = " المنافذ [مجمّدة] (f للاستئناف) "
+TUI_PortsListSearch = " بحث المنافذ: %s_ (Esc للمسح) "
+TUI_PortsListKill = " المنافذ - تأكيد الإنهاء (PID %d) "
+TUI_PortsListExternal = " المنافذ [خارجية فقط] (e الكل، / بحث، F9 إنهاء) "
 TUI_ProcessListFull = "قائمة العمليات (↑/↓ تمرير، / بحث، f تجميد، F9 إنهاء)"
 TUI_ProcessListFrozen = " قائمة العمليات [مجمدة] (f للاستئناف) "
 TUI_ProcessListSearch = " بحث: %s_ (Esc للمسح) "
@@ -263,6 +281,10 @@ CLI_HelpText = """
       --overlay-sections  أقسام مرئية مفصولة بفواصل (مثل cpu,gpu,memory,power)
       --overlay-opacity   شفافية نافذة overlay, 0.15-1.0 (الافتراضي: 0.88)
       --fan-control       تفعيل التحكم التفاعلي بالمراوح (يكتب إلى SMC)
+      --fan-set <value>   ضبط سرعة المراوح ثم الخروج: RPM أو نسبة مئوية (60%) أو min أو max أو auto (يتطلب sudo)
+      --fan-id <n>        تطبيق --fan-set على مروحة واحدة حسب المعرّف (الافتراضي: جميع المراوح)
+      --fan-auto          استعادة التحكم التلقائي في المراوح ثم الخروج (يتطلب sudo)
+      --fan-status        طباعة حالة المراوح بصيغة JSON ثم الخروج
       --dump-temps        تشخيص: عرض جميع مفاتيح حرارة SMC والخروج
       --dump-debug        تشخيص: عرض معلومات تصحيح IOReport/HID/SMC/NVMe والخروج
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (المتوسط %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "ق %s/s ك %s/s"
 Info_DRAMBWValue = "ق %.1f / ك %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s متاح)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ التحكم بالمراوح نشط](fg:red,mod:bold)
 Fan_ReadOnly = "[للقراءة فقط](fg:%s)  استخدم --fan-control للكتابة  |  [l](fg:%s,mod:bold) تخطيط  [F](fg:%s,mod:bold) إغلاق عرض المراوح"
 Fan_NeedsRoot = "[⚠ يتطلب التحكم بالمراوح صلاحيات root — أعد التشغيل بـ: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ آخر عملية كتابة لم يكن لها تأثير (رفضها النظام)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "خطأ: تتطلب كتابات التحكم في المراوح صلاحيات root — نفّذ: sudo mactop %s"
+FanCLI_WriteFailed = "خطأ: فشلت كتابة التحكم في المراوح: %v"
+FanCLI_InvalidValue = "خطأ: قيمة --fan-set غير صالحة '%s' — استخدم رقم RPM أو نسبة مئوية مثل 60%% أو min أو max أو auto"
+FanCLI_UnknownFan = "خطأ: لا توجد مروحة بالمعرّف %d (تم اكتشاف %d مراوح)"
+FanCLI_NoMaxRPM = "خطأ: المروحة لا تُبلغ عن حد أقصى للـ RPM — استخدم قيمة RPM مطلقة بدلاً من النسبة المئوية/max"
+FanCLI_FanPinned = "تم تثبيت المروحة %d على %d RPM (الوضع اليدوي)"
+FanCLI_AutoRestored = "تمت إعادة جميع المراوح إلى التحكم التلقائي"
+FanCLI_ManualWarning = "⚠ تبقى المراوح في الوضع اليدوي بعد خروج mactop — لاستعادة التحكم التلقائي: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "تحذير: قبِل SMC الكتابة لكن حالة المروحة لم تتغير — ربما تجاوزها نظام التشغيل"
 
 Metrics_PowerSparklineGroup = "%.2f W الإجمالي (الأقصى: %.2f W)"
 Metrics_PowerSparklineTitle = "المتوسط %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "قيد الشحن"
 Info_BatteryDischarging = "على البطارية"
 Info_BatteryAC = "التيار المتردد"
+Info_PowerSupply = "مزوّد الطاقة"
 
 TUI_MemoryBandwidthHistory = "سجل عرض نطاق الذاكرة"
 Metrics_MemBWHistoryDetail = "عرض نطاق DRAM: %.1f GB/s"

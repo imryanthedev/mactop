@@ -26,7 +26,7 @@ func init() {
 }
 
 var (
-	version                                                     = "v2.1.5"
+	version                                                     = "v2.1.6"
 	cpuGauge, gpuGauge, memoryGauge, aneGauge                   *w.Gauge
 	mainBlock                                                   *ui.Block
 	modelText, PowerChart, NetworkInfo, helpText, infoParagraph *w.Paragraph
@@ -52,11 +52,15 @@ var (
 	// StepChart widgets for History layout
 	gpuHistoryChart, powerHistoryChart, memoryHistoryChart, cpuHistoryChart *w.StepChart
 	memBWHistoryChart                                                       *w.StepChart
+	memoryPressureHistoryChart                                              *w.StepChart
 	aneHistoryChart, bandwidthHistoryChart                                  *w.StepChart
 	socPowerHistoryChart                                                    *w.StepChart // Multi-line power for history_soc (CPU/GPU/ANE/DRAM)
 	ssdReadHistoryChart                                                     *w.StepChart // Combined SSD read bandwidth history (GB/s)
 	memoryUsedHistory                                                       = make([]float64, 100)
 	swapUsedHistory                                                         = make([]float64, 100)
+	memoryPressureHistory                                                   = make([]float64, 100)
+	memoryPressureGauge                                                     *w.Gauge
+	memoryPressurePanel                                                     *w.Paragraph
 	cpuUsageHistory                                                         = make([]float64, 100)
 	powerUsageHistory                                                       = make([]float64, 100)
 	memBWReadHistory                                                        = make([]float64, 100)
@@ -65,14 +69,15 @@ var (
 	// ANE estimate state shared between the sampler goroutine (latch writes in
 	// sampleSocMetrics) and the UI/menubar/overlay goroutines (reads + adaptive
 	// max updates in aneUtilizationPercent) — atomics to avoid a data race.
-	maxANEBWSeenBits    atomic.Uint64 // float64 bits; monotonic session max
-	aneBWModeLatched    atomic.Bool
-	aneResidencyLatched atomic.Bool // M5-class: ANEActive (PMP residency) seen this session
-	aneUsageHistory     = make([]float64, 100)
-	dramReadHistory     = make([]float64, 100)
-	dramWriteHistory    = make([]float64, 100)
-	aneReadBwHistory    = make([]float64, 100)
-	aneWriteBwHistory   = make([]float64, 100)
+	maxANEBWSeenBits                       atomic.Uint64 // float64 bits; monotonic session max
+	aneBWModeLatched                       atomic.Bool
+	aneResidencyLatched                    atomic.Bool // M5-class: ANEActive (PMP residency) seen this session
+	aneUsageHistory                        = make([]float64, 100)
+	aneCluster0History, aneCluster1History = make([]float64, 100), make([]float64, 100)
+	dramReadHistory                        = make([]float64, 100)
+	dramWriteHistory                       = make([]float64, 100)
+	aneReadBwHistory                       = make([]float64, 100)
+	aneWriteBwHistory                      = make([]float64, 100)
 
 	// previousLayout remembers the layout active before a direct switchToLayout
 	// jump (e.g. the 'a' ANE/BW history shortcut), so the key toggles back.
@@ -108,7 +113,7 @@ var (
 	sortReverse                   = false
 	columns                       = []string{"PID", "USER", "VIRT", "RES", "CPU", "GPU", "MEM", "TIME", "CMD"}
 	selectedColumn                = 4
-	maxPowerSeen                  = 0.1
+	maxPowerSeen                  = minPowerScale
 	gpuValues                     = make([]float64, 100)
 
 	prometheusPort   string
@@ -123,6 +128,10 @@ var (
 	cliLanguage      string  // Language override flag
 	resolvedLanguage string  // Final resolved language (CLI > env > config > system)
 	fanControl       bool    // Enable interactive fan speed control (requires --fan-control flag)
+	fanSetSpec       string  // --fan-set: one-shot headless fan target (RPM, NN%, min, max, auto)
+	fanSetID         int     // --fan-id: fan targeted by --fan-set (-1 = all fans)
+	fanAutoFlag      bool    // --fan-auto: one-shot restore of automatic fan control
+	fanStatusFlag    bool    // --fan-status: one-shot fan state JSON dump
 	overlay          bool    // Show floating overlay HUD window
 	overlayWorker    bool    // Hidden: run as overlay worker process
 	overlaySections  string  // Comma-separated visible sections for overlay
@@ -162,6 +171,7 @@ var (
 	netdiskMetricsChan      = make(chan NetDiskMetrics, 1)
 	tbNetStatsChan          = make(chan []ThunderboltNetStats, 1)
 	processMetricsChan      = make(chan []ProcessMetrics, 1)
+	portMetricsChan         = make(chan []PortMetrics, 1)
 	ticker                  *time.Ticker
 
 	cachedHostname      string
@@ -258,6 +268,20 @@ var (
 		[]string{"type"},
 	)
 
+	memoryPressureLevelGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mactop_memory_pressure_level",
+			Help: "Kernel memory pressure level (1=Normal, 2=Warning, 4=Critical)",
+		},
+	)
+
+	memoryPressureApproxGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mactop_memory_pressure_approx",
+			Help: "Approximate memory pressure score 0-100 derived from kernel level plus usage/swap/compression",
+		},
+	)
+
 	networkSpeed = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "mactop_network_kbytes_per_sec",
@@ -313,6 +337,20 @@ var (
 		},
 	)
 
+	powerSupplyOnAC = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mactop_power_supply_on_ac",
+			Help: "1 if drawing from an external power supply, 0 if on battery",
+		},
+	)
+
+	powerSupplyAdapterWatts = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mactop_power_supply_adapter_watts",
+			Help: "Rated wattage of the attached power supply, -1 if the hardware does not report one",
+		},
+	)
+
 	dramBandwidth = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "mactop_dram_bandwidth_gbs",
@@ -337,5 +375,25 @@ var (
 			Help: "System information (value is always 1, labels contain info)",
 		},
 		[]string{"model", "core_count", "e_core_count", "p_core_count", "s_core_count", "gpu_core_count"},
+	)
+
+	listeningPortsTotal = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mactop_listening_ports_total",
+			Help: "Number of listening TCP/UDP ports visible without root",
+		},
+	)
+	listeningPortsExternal = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "mactop_listening_ports_external",
+			Help: "Number of listening ports bound beyond localhost",
+		},
+	)
+	listeningPortsByProto = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "mactop_listening_ports",
+			Help: "Listening ports by protocol",
+		},
+		[]string{"protocol"},
 	)
 )

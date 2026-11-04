@@ -32,6 +32,13 @@ TUI_ECPUUsage = "Uso E-CPU"
 TUI_PCPUUsage = "Uso P-CPU"
 TUI_GPUUsage = "Uso de GPU"
 TUI_MemoryUsage = "Uso de Memoria"
+TUI_MemoryPressure = "Presión de memoria"
+TUI_MemoryPressureHistory = "Historial de presión de memoria"
+Metrics_MemPressureGauge = "Presión: %s (%.0f)"
+Metrics_MemPressurePanel = "Estado: %s\nNivel: %d\nAprox.: %.0f\nComprimida: %.1f GB"
+Metrics_MemPressureHistoryDetail = "Presión: %s (%.0f)"
+Info_MemoryPressure = "Presión mem."
+Info_MemoryPressureValue = "%s (nivel %d, aprox. %.0f)"
 TUI_ANEUsage = "Uso de ANE"
 TUI_PowerUsage = "Uso de Energía"
 TUI_NetworkDisk = "Red y Disco"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "MEM"
 Process_TIME = "TIEMPO"
 Process_CMD = "COMANDO"
-
+Port_PORT = "PUERTO"
+Port_PROTO = "PROTO"
+Port_BIND = "ENLACE"
+Port_PID = "PID"
+Port_USER = "USUAR"
+Port_ESTAB = "ESTAB"
+Port_CMD = "CMD"
+TUI_PortsListFull = "Puertos (↑/↓ desplazar, / buscar, e externos, f congelar, F9 matar)"
+TUI_PortsListFrozen = " Puertos [CONGELADOS] (f para reanudar) "
+TUI_PortsListSearch = " Buscar puertos: %s_ (Esc para borrar) "
+TUI_PortsListKill = " Puertos - CONFIRMAR MATAR (PID %d) "
+TUI_PortsListExternal = " Puertos [SOLO EXTERNOS] (e todos, / buscar, F9 matar) "
 TUI_ProcessListFull = "Lista de Procesos (↑/↓ despl., / buscar, f congelar, F9 matar)"
 TUI_ProcessListFrozen = " Lista de Procesos [CONGELADA] (f para reanudar) "
 TUI_ProcessListSearch = " Buscar: %s_ (Esc para limpiar) "
@@ -263,6 +281,10 @@ Opciones:
       --overlay-sections  Secciones visibles separadas por comas (p. ej. cpu,gpu,memory,power)
       --overlay-opacity   Opacidad de la ventana overlay, 0.15-1.0 (por defecto: 0.88)
       --fan-control       Activar el control interactivo de ventiladores (escribe en SMC)
+      --fan-set <value>   Fijar la velocidad del ventilador y salir: RPM, porcentaje (60%), min, max o auto (requiere sudo)
+      --fan-id <n>        Aplicar --fan-set a un solo ID de ventilador (por defecto: todos)
+      --fan-auto          Restaurar el control automático de ventiladores y salir (requiere sudo)
+      --fan-status        Imprimir el estado de los ventiladores como JSON y salir
       --dump-temps        Diagnóstico: volcar todas las claves de temperatura SMC y salir
       --dump-debug        Diagnóstico: volcar datos de depuración IOReport/HID/SMC/NVMe y salir
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (Prom %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "L %s/s E %s/s"
 Info_DRAMBWValue = "L %.1f / E %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s libres)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ CONTROL DE VENTILADOR ACTIVO](fg:red,mod:bold)  [+/-](
 Fan_ReadOnly = "[Solo lectura](fg:%s)  Usa --fan-control para habilitar escritura  |  [l](fg:%s,mod:bold) Diseño  [F](fg:%s,mod:bold) Salir de vista de ventiladores"
 Fan_NeedsRoot = "[⚠ El control de ventiladores requiere root — reinicia con: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ la última escritura no tuvo efecto (rechazada por el SO)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "Error: las escrituras de control de ventiladores requieren root — ejecuta: sudo mactop %s"
+FanCLI_WriteFailed = "Error: falló la escritura de control de ventiladores: %v"
+FanCLI_InvalidValue = "Error: valor de --fan-set no válido '%s' — usa un número de RPM, un porcentaje como 60%%, min, max o auto"
+FanCLI_UnknownFan = "Error: no hay ventilador con ID %d (%d ventiladores detectados)"
+FanCLI_NoMaxRPM = "Error: el ventilador no informa RPM máximas — usa RPM absolutas en lugar de porcentaje/max"
+FanCLI_FanPinned = "Ventilador %d fijado a %d RPM (modo manual)"
+FanCLI_AutoRestored = "Todos los ventiladores restaurados al control automático"
+FanCLI_ManualWarning = "⚠ Los ventiladores permanecen en modo manual tras salir de mactop — restaura el control automático con: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "Advertencia: el SMC aceptó la escritura pero el estado del ventilador no cambió — el SO puede haberla anulado"
 
 Metrics_PowerSparklineGroup = "%.2f W Total (Máx: %.2f W)"
 Metrics_PowerSparklineTitle = "Prom %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "cargando"
 Info_BatteryDischarging = "con batería"
 Info_BatteryAC = "corriente"
+Info_PowerSupply = "Fuente de alimentación"
 
 TUI_MemoryBandwidthHistory = "Historial de ancho de banda de memoria"
 Metrics_MemBWHistoryDetail = "Ancho de banda DRAM: %.1f GB/s"

@@ -32,6 +32,13 @@ TUI_ECPUUsage = "Penggunaan E-CPU"
 TUI_PCPUUsage = "Penggunaan P-CPU"
 TUI_GPUUsage = "Penggunaan GPU"
 TUI_MemoryUsage = "Penggunaan Memori"
+TUI_MemoryPressure = "Tekanan memori"
+TUI_MemoryPressureHistory = "Riwayat tekanan memori"
+Metrics_MemPressureGauge = "Tekanan: %s (%.0f)"
+Metrics_MemPressurePanel = "Status: %s\nTingkat: %d\nPerkiraan: %.0f\nDikompresi: %.1f GB"
+Metrics_MemPressureHistoryDetail = "Tekanan: %s (%.0f)"
+Info_MemoryPressure = "Tekanan mem."
+Info_MemoryPressureValue = "%s (tingkat %d, kira-kira %.0f)"
 TUI_ANEUsage = "Penggunaan ANE"
 TUI_PowerUsage = "Konsumsi Daya"
 TUI_NetworkDisk = "Jaringan & Disk"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "MEM"
 Process_TIME = "WAKTU"
 Process_CMD = "PERINTAH"
-
+Port_PORT = "PORT"
+Port_PROTO = "PROTO"
+Port_BIND = "IKAT"
+Port_PID = "PID"
+Port_USER = "PENGG"
+Port_ESTAB = "TERHUB"
+Port_CMD = "CMD"
+TUI_PortsListFull = "Port (↑/↓ gulir, / cari, e eksternal, f bekukan, F9 hentikan)"
+TUI_PortsListFrozen = " Port [DIBEKUKAN] (f untuk lanjut) "
+TUI_PortsListSearch = " Cari port: %s_ (Esc untuk hapus) "
+TUI_PortsListKill = " Port - KONFIRMASI HENTIKAN (PID %d) "
+TUI_PortsListExternal = " Port [HANYA EKSTERNAL] (e semua, / cari, F9 hentikan) "
 TUI_ProcessListFull = "Daftar Proses (↑/↓ gulir, / cari, f bekukan, F9 hentikan)"
 TUI_ProcessListFrozen = " Daftar Proses [DIBEKUKAN] (f untuk lanjutkan) "
 TUI_ProcessListSearch = " Cari: %s_ (Esc untuk hapus) "
@@ -263,6 +281,10 @@ Opsi:
       --overlay-sections  Bagian terlihat dipisahkan koma (cth. cpu,gpu,memory,power)
       --overlay-opacity   Opasitas jendela overlay, 0.15-1.0 (default: 0.88)
       --fan-control       Aktifkan kontrol kipas interaktif (menulis ke SMC)
+      --fan-set <value>   Atur kecepatan kipas lalu keluar: RPM, persentase (60%), min, max, atau auto (perlu sudo)
+      --fan-id <n>        Terapkan --fan-set ke satu ID kipas (default: semua kipas)
+      --fan-auto          Pulihkan kontrol kipas otomatis lalu keluar (perlu sudo)
+      --fan-status        Cetak status kipas sebagai JSON lalu keluar
       --dump-temps        Diagnostik: tampilkan semua kunci suhu SMC mentah dan keluar
       --dump-debug        Diagnostik: tampilkan info debug IOReport/HID/SMC/NVMe dan keluar
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (Rata-rata %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "B %s/s T %s/s"
 Info_DRAMBWValue = "B %.1f / T %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s kosong)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ KONTROL KIPAS AKTIF](fg:red,mod:bold)  [+/-](fg:%s,mod
 Fan_ReadOnly = "[Hanya baca](fg:%s)  Gunakan --fan-control untuk menulis  |  [l](fg:%s,mod:bold) Tata Letak  [F](fg:%s,mod:bold) Tutup tampilan kipas"
 Fan_NeedsRoot = "[⚠ Kontrol kipas perlu root — jalankan ulang: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ penulisan terakhir tidak berpengaruh (ditolak OS)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "Kesalahan: penulisan kontrol kipas memerlukan root — jalankan: sudo mactop %s"
+FanCLI_WriteFailed = "Kesalahan: penulisan kontrol kipas gagal: %v"
+FanCLI_InvalidValue = "Kesalahan: nilai --fan-set tidak valid '%s' — gunakan angka RPM, persentase seperti 60%%, min, max, atau auto"
+FanCLI_UnknownFan = "Kesalahan: tidak ada kipas dengan ID %d (terdeteksi %d kipas)"
+FanCLI_NoMaxRPM = "Kesalahan: kipas tidak melaporkan RPM maksimum — gunakan nilai RPM absolut alih-alih persentase/max"
+FanCLI_FanPinned = "Kipas %d dikunci pada %d RPM (mode manual)"
+FanCLI_AutoRestored = "Semua kipas dikembalikan ke kontrol otomatis"
+FanCLI_ManualWarning = "⚠ Kipas tetap dalam mode manual setelah mactop keluar — pulihkan kontrol otomatis dengan: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "Peringatan: SMC menerima penulisan tetapi status kipas tidak berubah — OS mungkin telah menimpanya"
 
 Metrics_PowerSparklineGroup = "%.2f W Total (Maks: %.2f W)"
 Metrics_PowerSparklineTitle = "Rata-rata %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "mengisi daya"
 Info_BatteryDischarging = "pakai baterai"
 Info_BatteryAC = "AC"
+Info_PowerSupply = "Sumber Daya"
 
 TUI_MemoryBandwidthHistory = "Riwayat Bandwidth Memori"
 Metrics_MemBWHistoryDetail = "Bandwidth DRAM: %.1f GB/s"

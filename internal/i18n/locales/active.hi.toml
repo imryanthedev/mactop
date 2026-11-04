@@ -32,6 +32,13 @@ TUI_ECPUUsage = "E-CPU उपयोग"
 TUI_PCPUUsage = "P-CPU उपयोग"
 TUI_GPUUsage = "GPU उपयोग"
 TUI_MemoryUsage = "मेमोरी उपयोग"
+TUI_MemoryPressure = "मेमोरी दबाव"
+TUI_MemoryPressureHistory = "मेमोरी दबाव इतिहास"
+Metrics_MemPressureGauge = "दबाव: %s (%.0f)"
+Metrics_MemPressurePanel = "स्थिति: %s\nस्तर: %d\nलगभग: %.0f\nसंपीड़ित: %.1f GB"
+Metrics_MemPressureHistoryDetail = "दबाव: %s (%.0f)"
+Info_MemoryPressure = "मेमोरी दबाव"
+Info_MemoryPressureValue = "%s (स्तर %d, लगभग %.0f)"
 TUI_ANEUsage = "ANE उपयोग"
 TUI_PowerUsage = "ऊर्जा खपत"
 TUI_NetworkDisk = "नेटवर्क और डिस्क"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "मेम"
 Process_TIME = "समय"
 Process_CMD = "कमांड"
-
+Port_PORT = "पोर्ट"
+Port_PROTO = "प्रोटो"
+Port_BIND = "बाइंड"
+Port_PID = "PID"
+Port_USER = "उपयोग"
+Port_ESTAB = "कनेक्ट"
+Port_CMD = "कमांड"
+TUI_PortsListFull = "पोर्ट (↑/↓ स्क्रॉल, / खोज, e बाहरी, f फ्रीज़, F9 समाप्त)"
+TUI_PortsListFrozen = " पोर्ट [फ्रीज़] (f जारी रखें) "
+TUI_PortsListSearch = " पोर्ट खोज: %s_ (Esc साफ़ करें) "
+TUI_PortsListKill = " पोर्ट - समाप्त की पुष्टि (PID %d) "
+TUI_PortsListExternal = " पोर्ट [केवल बाहरी] (e सभी, / खोज, F9 समाप्त) "
 TUI_ProcessListFull = "प्रोसेस सूची (↑/↓ स्क्रॉल, / खोज, f रोकें, F9 समाप्त)"
 TUI_ProcessListFrozen = " प्रोसेस सूची [रोका गया] (f से जारी रखें) "
 TUI_ProcessListSearch = " खोज: %s_ (Esc से साफ़ करें) "
@@ -263,6 +281,10 @@ CLI_HelpText = """
       --overlay-sections  अल्पविराम से अलग दिखाई देने वाले अनुभाग (जैसे cpu,gpu,memory,power)
       --overlay-opacity   Overlay विंडो अपारदर्शिता, 0.15-1.0 (डिफ़ॉल्ट: 0.88)
       --fan-control       इंटरैक्टिव पंखा नियंत्रण सक्षम करें (SMC में लिखता है)
+      --fan-set <value>   फैन गति सेट करें और बाहर निकलें: RPM, प्रतिशत (60%), min, max या auto (sudo आवश्यक)
+      --fan-id <n>        --fan-set को एक ही फैन ID पर लागू करें (डिफ़ॉल्ट: सभी फैन)
+      --fan-auto          फैन का स्वचालित नियंत्रण बहाल करें और बाहर निकलें (sudo आवश्यक)
+      --fan-status        फैन की स्थिति JSON में प्रिंट करें और बाहर निकलें
       --dump-temps        डायग्नोस्टिक: सभी कच्ची SMC तापमान कुंजियाँ दिखाएँ और बाहर निकलें
       --dump-debug        डायग्नोस्टिक: IOReport/HID/SMC/NVMe डीबग जानकारी दिखाएँ और बाहर निकलें
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (औसत %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "पढ़ %s/s लिख %s/s"
 Info_DRAMBWValue = "पढ़ %.1f / लिख %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s उपलब्ध)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ पंखा नियंत्रण सक्रि�
 Fan_ReadOnly = "[केवल पढ़ने के लिए](fg:%s)  लिखने के लिए --fan-control उपयोग करें  |  [l](fg:%s,mod:bold) लेआउट  [F](fg:%s,mod:bold) पंखा दृश्य बंद करें"
 Fan_NeedsRoot = "[⚠ फैन नियंत्रण के लिए root आवश्यक है — पुनः चलाएँ: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ अंतिम राइट का कोई प्रभाव नहीं (OS ने अस्वीकार किया)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "त्रुटि: फैन नियंत्रण लेखन के लिए root आवश्यक है — चलाएँ: sudo mactop %s"
+FanCLI_WriteFailed = "त्रुटि: फैन नियंत्रण लेखन विफल: %v"
+FanCLI_InvalidValue = "त्रुटि: अमान्य --fan-set मान '%s' — RPM संख्या, 60%% जैसा प्रतिशत, min, max या auto उपयोग करें"
+FanCLI_UnknownFan = "त्रुटि: ID %d वाला कोई फैन नहीं (%d फैन मिले)"
+FanCLI_NoMaxRPM = "त्रुटि: फैन अधिकतम RPM नहीं बताता — प्रतिशत/max के बजाय निरपेक्ष RPM मान उपयोग करें"
+FanCLI_FanPinned = "फैन %d को %d RPM पर स्थिर किया गया (मैनुअल मोड)"
+FanCLI_AutoRestored = "सभी फैन स्वचालित नियंत्रण पर बहाल किए गए"
+FanCLI_ManualWarning = "⚠ mactop बंद होने के बाद भी फैन मैनुअल मोड में रहते हैं — स्वचालित नियंत्रण बहाल करें: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "चेतावनी: SMC ने लेखन स्वीकार किया लेकिन फैन स्थिति नहीं बदली — OS ने इसे ओवरराइड किया हो सकता है"
 
 Metrics_PowerSparklineGroup = "%.2f W कुल (अधिकतम: %.2f W)"
 Metrics_PowerSparklineTitle = "औसत %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "चार्ज हो रही है"
 Info_BatteryDischarging = "बैटरी पर"
 Info_BatteryAC = "एसी"
+Info_PowerSupply = "बिजली आपूर्ति"
 
 TUI_MemoryBandwidthHistory = "मेमोरी बैंडविड्थ इतिहास"
 Metrics_MemBWHistoryDetail = "DRAM बैंडविड्थ: %.1f GB/s"

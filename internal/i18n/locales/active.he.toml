@@ -32,6 +32,13 @@ TUI_ECPUUsage = "שימוש E-CPU"
 TUI_PCPUUsage = "שימוש P-CPU"
 TUI_GPUUsage = "שימוש GPU"
 TUI_MemoryUsage = "שימוש בזיכרון"
+TUI_MemoryPressure = "לחץ זיכרון"
+TUI_MemoryPressureHistory = "היסטוריית לחץ זיכרון"
+Metrics_MemPressureGauge = "לחץ: %s (%.0f)"
+Metrics_MemPressurePanel = "מצב: %s\nרמה: %d\nבערך: %.0f\nדחוס: %.1f GB"
+Metrics_MemPressureHistoryDetail = "לחץ: %s (%.0f)"
+Info_MemoryPressure = "לחץ זיכרון"
+Info_MemoryPressureValue = "%s (רמה %d, בערך %.0f)"
 TUI_ANEUsage = "שימוש ANE"
 TUI_PowerUsage = "צריכת חשמל"
 TUI_NetworkDisk = "רשת ודיסק"
@@ -125,7 +132,18 @@ Process_GPU = "GPU"
 Process_MEM = "זיכרון"
 Process_TIME = "זמן"
 Process_CMD = "פקודה"
-
+Port_PORT = "פורט"
+Port_PROTO = "פרוטו"
+Port_BIND = "קישור"
+Port_PID = "PID"
+Port_USER = "משתמש"
+Port_ESTAB = "מחובר"
+Port_CMD = "פקודה"
+TUI_PortsListFull = "פורטים (↑/↓ גלילה, / חיפוש, e חיצוניים, f הקפאה, F9 סיום)"
+TUI_PortsListFrozen = " פורטים [מוקפאים] (f להמשך) "
+TUI_PortsListSearch = " חיפוש פורטים: %s_ (Esc לניקוי) "
+TUI_PortsListKill = " פורטים - אישור סיום (PID %d) "
+TUI_PortsListExternal = " פורטים [חיצוניים בלבד] (e הכל, / חיפוש, F9 סיום) "
 TUI_ProcessListFull = "רשימת תהליכים (↑/↓ גלילה, / חיפוש, f הקפאה, F9 סיום)"
 TUI_ProcessListFrozen = " רשימת תהליכים [מוקפאת] (f להמשך) "
 TUI_ProcessListSearch = " חיפוש: %s_ (Esc לניקוי) "
@@ -263,6 +281,10 @@ CLI_HelpText = """
       --overlay-sections  אזורים נראים מופרדים בפסיקים (לדוגמה cpu,gpu,memory,power)
       --overlay-opacity   שקיפות חלון overlay, 0.15-1.0 (ברירת מחדל: 0.88)
       --fan-control       הפעל בקרת מאווררים אינטראקטיבית (כותב ל-SMC)
+      --fan-set <value>   קביעת מהירות מאווררים ויציאה: RPM, אחוז (60%), min, max או auto (דורש sudo)
+      --fan-id <n>        החלת --fan-set על מזהה מאוורר יחיד (ברירת מחדל: כל המאווררים)
+      --fan-auto          שחזור בקרת מאווררים אוטומטית ויציאה (דורש sudo)
+      --fan-status        הדפסת מצב המאווררים כ-JSON ויציאה
       --dump-temps        אבחון: הצג את כל מפתחות טמפרטורת SMC וצא
       --dump-debug        אבחון: הצג מידע ניפוי IOReport/HID/SMC/NVMe וצא
 
@@ -300,7 +322,7 @@ Info_PowerValue = "%.2f W (ממוצע %.0f W)"
 Info_NetworkValue = "↑ %s/s ↓ %s/s"
 Info_DiskValue = "ק %s/s כ %s/s"
 Info_DRAMBWValue = "ק %.1f / כ %.1f / %.1f GB/s"
-Info_FanValue = "%d RPM (%s, %d-%d)"
+Info_FanValue = "%s (%s, %d-%d)"
 Info_WiFiValue = "%s @ %dMbps (%s)"
 Info_VolumeValue = "%s / %s (%s פנוי)"
 
@@ -312,6 +334,15 @@ Fan_ControlActive = "[⚠ בקרת מאווררים פעילה](fg:red,mod:bold)
 Fan_ReadOnly = "[קריאה בלבד](fg:%s)  השתמש ב---fan-control לכתיבה  |  [l](fg:%s,mod:bold) פריסה  [F](fg:%s,mod:bold) סגור תצוגת מאווררים"
 Fan_NeedsRoot = "[⚠ בקרת המאווררים דורשת root — הפעל מחדש עם: sudo mactop --fan-control](fg:red,mod:bold)"
 Fan_WriteFailed = "  [⚠ הכתיבה האחרונה לא נכנסה לתוקף (נדחתה על ידי מערכת ההפעלה)](fg:red,mod:bold)"
+FanCLI_NeedsRoot = "שגיאה: כתיבות בקרת מאווררים דורשות root — הרץ: sudo mactop %s"
+FanCLI_WriteFailed = "שגיאה: כתיבת בקרת מאווררים נכשלה: %v"
+FanCLI_InvalidValue = "שגיאה: ערך --fan-set לא חוקי '%s' — השתמש במספר RPM, אחוז כמו 60%%, min, max או auto"
+FanCLI_UnknownFan = "שגיאה: אין מאוורר עם מזהה %d (זוהו %d מאווררים)"
+FanCLI_NoMaxRPM = "שגיאה: המאוורר אינו מדווח על RPM מקסימלי — השתמש בערך RPM מוחלט במקום אחוז/max"
+FanCLI_FanPinned = "מאוורר %d קובע ל-%d RPM (מצב ידני)"
+FanCLI_AutoRestored = "כל המאווררים הוחזרו לבקרה אוטומטית"
+FanCLI_ManualWarning = "⚠ המאווררים נשארים במצב ידני לאחר יציאת mactop — שחזר בקרה אוטומטית עם: sudo mactop --fan-auto"
+FanCLI_VerifyFailed = "אזהרה: ה-SMC קיבל את הכתיבה אך מצב המאוורר לא השתנה — ייתכן שמערכת ההפעלה עקפה אותה"
 
 Metrics_PowerSparklineGroup = "%.2f W סה״כ (מקס: %.2f W)"
 Metrics_PowerSparklineTitle = "ממוצע %.2f W | %s"
@@ -384,6 +415,7 @@ Info_BatteryValue = "%d%% (%s)"
 Info_BatteryCharging = "בטעינה"
 Info_BatteryDischarging = "על סוללה"
 Info_BatteryAC = "חשמל"
+Info_PowerSupply = "ספק חשמל"
 
 TUI_MemoryBandwidthHistory = "היסטוריית רוחב פס זיכרון"
 Metrics_MemBWHistoryDetail = "רוחב פס DRAM: %.1f GB/s"
