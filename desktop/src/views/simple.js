@@ -98,7 +98,7 @@ export function renderSimple(metrics) {
 
   const socTemp = soc.soc_temp;
   const cpuTemp = soc.cpu_temp;
-  const hasSocTemp = typeof socTemp === "number" && !Number.isNaN(socTemp);
+  const hasSocTemp = typeof socTemp === "number" && !Number.isNaN(socTemp) && socTemp > 0;
   const temp = hasSocTemp ? socTemp : cpuTemp;
   elements.tempValue.textContent = formatTemp(temp);
   elements.tempDetail.textContent = hasSocTemp ? "SoC" : "CPU";

@@ -67,6 +67,9 @@ func TestHeadlessIntegration(t *testing.T) {
 	if sample.ThermalState == "" {
 		t.Error("Expected non-empty thermal state")
 	}
+	if !bytes.Contains(output, []byte(`"thermal_level"`)) {
+		t.Error("Expected thermal_level in JSON output")
+	}
 	if sample.ThermalLevel < -1 || sample.ThermalLevel > 4 {
 		t.Errorf("Expected thermal level in [-1, 4], got %d", sample.ThermalLevel)
 	}

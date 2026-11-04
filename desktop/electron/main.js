@@ -93,6 +93,7 @@ function handleStdoutLine(line) {
   }
 
   try {
+    sidecarRestarts = 0;
     send("metrics:update", JSON.parse(trimmed));
   } catch (err) {
     send("metrics:error", `Unreadable sample: ${err.message}`);

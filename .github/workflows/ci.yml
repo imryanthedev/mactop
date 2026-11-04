@@ -37,6 +37,9 @@ jobs:
       - name: Lint
         run: make sexy
 
+      - name: Lint must not rewrite tracked files
+        run: git diff --exit-code
+
       - name: Build
         run: make build
 

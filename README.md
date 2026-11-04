@@ -53,7 +53,7 @@ cd desktop && npm install
 npm start
 ```
 
-The desktop app currently spawns the Go binary in headless mode and polls JSON metrics. UI views are placeholders until the migration matures.
+The desktop app runs the Go binary once in headless mode and streams its newline-delimited JSON samples. UI views are placeholders until the migration matures.
 
 ## Legacy Terminal UI (Temporary)
 
