@@ -38,6 +38,14 @@ export function formatTimestamp(isoString) {
   return date.toLocaleTimeString();
 }
 
+export function formatKibPerSec(value, unit = "byte") {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "—";
+  }
+  const kib = unit === "kib" ? value : value / 1024;
+  return `${kib.toFixed(1)} KiB/s`;
+}
+
 export function clampPercent(value) {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return 0;

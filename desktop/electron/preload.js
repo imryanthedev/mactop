@@ -1,9 +1,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("mactop", {
-  fetchMetrics: () => ipcRenderer.invoke("metrics:fetch"),
   onMetricsUpdate: (callback) => {
-    const listener = (_event, data) => callback(data);
+    const listener = (_event, sample) => callback(sample);
     ipcRenderer.on("metrics:update", listener);
     return () => ipcRenderer.removeListener("metrics:update", listener);
   },

@@ -1,4 +1,4 @@
-import { formatPercent, formatWatts } from "./format.js";
+import { formatKibPerSec, formatPercent, formatWatts } from "./format.js";
 import { renderSimple, setSimpleLoading } from "./views/simple.js";
 import { getActiveView, initTabs, PHASE } from "./views/tabs.js";
 
@@ -28,15 +28,15 @@ function renderAdvanced(metrics) {
     `GPU power: ${formatWatts(soc.gpu_power)}`,
     `ANE power: ${formatWatts(soc.ane_power)}`,
     `DRAM power: ${formatWatts(soc.dram_power)}`,
-    `GPU freq: ${soc.gpu_freq_mhz || "—"} MHz`,
+    `GPU freq: ${soc.gpu_freq_mhz ? `${soc.gpu_freq_mhz} MHz` : "—"}`,
     `Cores tracked: ${metrics.core_usages?.length || 0}`,
   ].join("\n");
 
   document.getElementById("advanced-io").textContent = [
-    `Net in: ${(netDisk.in_bytes_per_sec / 1024).toFixed(1)} KiB/s`,
-    `Net out: ${(netDisk.out_bytes_per_sec / 1024).toFixed(1)} KiB/s`,
-    `Disk read: ${netDisk.read_kbytes_per_sec?.toFixed(1) || "—"} KiB/s`,
-    `Disk write: ${netDisk.write_kbytes_per_sec?.toFixed(1) || "—"} KiB/s`,
+    `Net in: ${formatKibPerSec(netDisk.in_bytes_per_sec, "byte")}`,
+    `Net out: ${formatKibPerSec(netDisk.out_bytes_per_sec, "byte")}`,
+    `Disk read: ${formatKibPerSec(netDisk.read_kbytes_per_sec, "kib")}`,
+    `Disk write: ${formatKibPerSec(netDisk.write_kbytes_per_sec, "kib")}`,
   ].join("\n");
 
   if (processes.length === 0) {
@@ -60,6 +60,7 @@ function renderMetrics(metrics) {
   }
 
   setStatus("");
+  setSimpleLoading(false);
   renderSimple(metrics);
 
   if (PHASE.advanced && getActiveView() === "advanced") {
@@ -76,15 +77,7 @@ if (window.mactop) {
   setSimpleLoading(true);
 
   window.mactop.onMetricsUpdate(renderMetrics);
-  window.mactop.onMetricsError((message) => {
-    setStatus(`Sidecar error: ${message}`, true);
-  });
-
-  window.mactop
-    .fetchMetrics()
-    .then(renderMetrics)
-    .catch((err) => setStatus(`Sidecar error: ${err.message}`, true))
-    .finally(() => setSimpleLoading(false));
+  window.mactop.onMetricsError((message) => setStatus(`Sidecar error: ${message}`, true));
 } else {
   setStatus("Desktop bridge unavailable. Run inside Electron.", true);
 }

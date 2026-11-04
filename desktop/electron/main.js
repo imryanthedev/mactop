@@ -1,95 +1,200 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, net, protocol } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
+const { pathToFileURL } = require("url");
 
-const POLL_INTERVAL_MS = 1000;
-const SIDECAR_ARGS = ["--headless", "--count", "1", "--pretty"];
+const RENDERER_SCHEME = "app";
+const RENDERER_HOST = "mactop";
+const SIDECAR_ARGS = ["--headless"]; // infinite samples: one JSON object per line
+const SIDECAR_RESTART_DELAY_MS = 2000;
+const MAX_SIDECAR_RESTARTS = 5;
+const MAX_STDOUT_BUFFER_BYTES = 4 * 1024 * 1024;
 
 let mainWindow = null;
 let sidecarProcess = null;
-let pollTimer = null;
+let sidecarRestartTimer = null;
+let sidecarRestarts = 0;
+let stdoutBuffer = "";
 
-function sidecarBinaryPath() {
-  const devBinary = path.resolve(__dirname, "..", "..", "mactop");
-  if (process.env.MACTOP_BINARY) {
-    return process.env.MACTOP_BINARY;
-  }
-  return devBinary;
-}
+// The renderer is ES modules, and Chromium refuses module scripts loaded over
+// file:// (opaque origin, CORS). Serving src/ from a standard, secure scheme
+// keeps the renderer modular without disabling webSecurity.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: RENDERER_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: true },
+  },
+]);
 
-function parseHeadlessOutput(stdout) {
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    return null;
-  }
+const CONTENT_TYPES = {
+  ".css": "text/css",
+  ".html": "text/html",
+  ".js": "text/javascript",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".woff2": "font/woff2",
+};
 
-  const payload = trimmed.startsWith("[") ? trimmed : `[${trimmed}]`;
-  const samples = JSON.parse(payload);
-  return Array.isArray(samples) ? samples[0] : samples;
-}
+function registerRendererProtocol() {
+  const srcRoot = path.join(__dirname, "..", "src");
 
-function fetchMetrics() {
-  return new Promise((resolve, reject) => {
-    const binary = sidecarBinaryPath();
-    const child = spawn(binary, SIDECAR_ARGS, {
-      cwd: path.resolve(__dirname, "..", ".."),
-    });
+  protocol.handle(RENDERER_SCHEME, async (request) => {
+    const { host, pathname } = new URL(request.url);
+    if (host !== RENDERER_HOST) {
+      return new Response("Not found", { status: 404 });
+    }
 
-    let stdout = "";
-    let stderr = "";
+    const relativePath = pathname === "/" ? "index.html" : pathname.slice(1);
+    const filePath = path.join(srcRoot, relativePath);
 
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
+    if (!filePath.startsWith(srcRoot + path.sep)) {
+      return new Response("Forbidden", { status: 403 });
+    }
 
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
+    const response = await net.fetch(pathToFileURL(filePath).toString());
 
-    child.on("error", (err) => {
-      reject(err);
-    });
+    // Chromium refuses module scripts without a JavaScript content type, and
+    // not every platform reports one for file: responses.
+    const contentType = CONTENT_TYPES[path.extname(filePath).toLowerCase()];
+    if (!contentType) {
+      return response;
+    }
 
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr || `sidecar exited with code ${code}`));
-        return;
-      }
-
-      try {
-        resolve(parseHeadlessOutput(stdout));
-      } catch (err) {
-        reject(err);
-      }
-    });
+    const headers = new Headers(response.headers);
+    headers.set("content-type", contentType);
+    return new Response(response.body, { status: response.status, headers });
   });
 }
 
-function startPolling() {
-  stopPolling();
+function sidecarBinaryPath() {
+  if (process.env.MACTOP_BINARY) {
+    return process.env.MACTOP_BINARY;
+  }
 
-  const poll = async () => {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      return;
-    }
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "mactop");
+  }
 
-    try {
-      const metrics = await fetchMetrics();
-      mainWindow.webContents.send("metrics:update", metrics);
-    } catch (err) {
-      mainWindow.webContents.send("metrics:error", err.message);
-    }
-  };
-
-  poll();
-  pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+  return path.resolve(__dirname, "..", "..", "mactop");
 }
 
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
+function send(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
   }
+  mainWindow.webContents.send(channel, payload);
+}
+
+function handleStdoutLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return;
+  }
+
+  try {
+    send("metrics:update", JSON.parse(trimmed));
+  } catch (err) {
+    send("metrics:error", `Unreadable sample: ${err.message}`);
+  }
+}
+
+function consumeStdout(chunk) {
+  stdoutBuffer += chunk;
+
+  // A malformed stream must not grow without bound.
+  if (stdoutBuffer.length > MAX_STDOUT_BUFFER_BYTES) {
+    stdoutBuffer = "";
+    send("metrics:error", "Sidecar produced more than 4 MiB without a newline.");
+    return;
+  }
+
+  let newlineIndex = stdoutBuffer.indexOf("\n");
+  while (newlineIndex !== -1) {
+    handleStdoutLine(stdoutBuffer.slice(0, newlineIndex));
+    stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+    newlineIndex = stdoutBuffer.indexOf("\n");
+  }
+}
+
+function stopSidecar() {
+  if (sidecarRestartTimer) {
+    clearTimeout(sidecarRestartTimer);
+    sidecarRestartTimer = null;
+  }
+
+  if (!sidecarProcess) {
+    return;
+  }
+
+  const child = sidecarProcess;
+  sidecarProcess = null;
+  stdoutBuffer = "";
+
+  child.removeAllListeners("close");
+  child.kill();
+}
+
+function scheduleSidecarRestart(reason) {
+  if (sidecarRestartTimer || !mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  if (sidecarRestarts >= MAX_SIDECAR_RESTARTS) {
+    send(
+      "metrics:error",
+      `Sidecar stopped ${sidecarRestarts} times (${reason}). Set MACTOP_BINARY and restart the app.`,
+    );
+    return;
+  }
+
+  sidecarRestarts += 1;
+  sidecarRestartTimer = setTimeout(() => {
+    sidecarRestartTimer = null;
+    startSidecar();
+  }, SIDECAR_RESTART_DELAY_MS);
+}
+
+function startSidecar() {
+  if (sidecarProcess) {
+    return;
+  }
+
+  const binary = sidecarBinaryPath();
+  stdoutBuffer = "";
+
+  const child = spawn(binary, SIDECAR_ARGS, {
+    cwd: path.resolve(__dirname, "..", ".."),
+  });
+  sidecarProcess = child;
+
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", consumeStdout);
+
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    const message = chunk.trim();
+    if (message) {
+      send("metrics:error", message);
+    }
+  });
+
+  child.on("error", (err) => {
+    if (sidecarProcess === child) {
+      sidecarProcess = null;
+    }
+    send("metrics:error", `Cannot start sidecar (${binary}): ${err.message}`);
+    scheduleSidecarRestart("spawn error");
+  });
+
+  child.on("close", (code) => {
+    if (sidecarProcess !== child) {
+      return;
+    }
+    sidecarProcess = null;
+    send("metrics:error", `Sidecar exited with code ${code}.`);
+    scheduleSidecarRestart(`exit ${code}`);
+  });
 }
 
 function createWindow() {
@@ -103,24 +208,25 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, "..", "src", "index.html"));
+  mainWindow.loadURL(`${RENDERER_SCHEME}://${RENDERER_HOST}/index.html`);
 
   mainWindow.on("closed", () => {
     mainWindow = null;
-    stopPolling();
+    stopSidecar();
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
-    startPolling();
+    sidecarRestarts = 0;
+    startSidecar();
   });
 }
 
-ipcMain.handle("metrics:fetch", () => fetchMetrics());
-
 app.whenReady().then(() => {
+  registerRendererProtocol();
   createWindow();
 
   app.on("activate", () => {
@@ -130,12 +236,12 @@ app.whenReady().then(() => {
   });
 });
 
+app.on("before-quit", () => {
+  stopSidecar();
+});
+
 app.on("window-all-closed", () => {
-  stopPolling();
-  if (sidecarProcess) {
-    sidecarProcess.kill();
-    sidecarProcess = null;
-  }
+  stopSidecar();
   if (process.platform !== "darwin") {
     app.quit();
   }
