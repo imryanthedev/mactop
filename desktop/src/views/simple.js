@@ -32,6 +32,10 @@ const elements = {
   thermalPill: document.getElementById("simple-thermal-pill"),
 };
 
+function isTemperature(value) {
+  return typeof value === "number" && !Number.isNaN(value) && value > 0;
+}
+
 function setGaugeFill(element, percent) {
   element.style.setProperty("--fill", `${clampPercent(percent)}%`);
 }
@@ -98,8 +102,8 @@ export function renderSimple(metrics) {
 
   const socTemp = soc.soc_temp;
   const cpuTemp = soc.cpu_temp;
-  const hasSocTemp = typeof socTemp === "number" && !Number.isNaN(socTemp) && socTemp > 0;
-  const temp = hasSocTemp ? socTemp : cpuTemp;
+  const hasSocTemp = isTemperature(socTemp);
+  const temp = hasSocTemp ? socTemp : isTemperature(cpuTemp) ? cpuTemp : null;
   elements.tempValue.textContent = formatTemp(temp);
   elements.tempDetail.textContent = hasSocTemp ? "SoC" : "CPU";
 

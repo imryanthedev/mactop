@@ -8,11 +8,13 @@ const RENDERER_HOST = "mactop";
 const SIDECAR_ARGS = ["--headless"]; // infinite samples: one JSON object per line
 const SIDECAR_RESTART_DELAY_MS = 2000;
 const MAX_SIDECAR_RESTARTS = 5;
+const SIDECAR_HEALTHY_AFTER_MS = 30000;
 const MAX_STDOUT_BUFFER_BYTES = 4 * 1024 * 1024;
 
 let mainWindow = null;
 let sidecarProcess = null;
 let sidecarRestartTimer = null;
+let sidecarStartedAt = 0;
 let sidecarRestarts = 0;
 let stdoutBuffer = "";
 
@@ -93,7 +95,11 @@ function handleStdoutLine(line) {
   }
 
   try {
-    sidecarRestarts = 0;
+    // Only a sidecar that stays up counts as healthy; a process that emits one
+    // sample and dies must keep consuming the restart budget.
+    if (Date.now() - sidecarStartedAt >= SIDECAR_HEALTHY_AFTER_MS) {
+      sidecarRestarts = 0;
+    }
     send("metrics:update", JSON.parse(trimmed));
   } catch (err) {
     send("metrics:error", `Unreadable sample: ${err.message}`);
@@ -163,6 +169,7 @@ function startSidecar() {
 
   const binary = sidecarBinaryPath();
   stdoutBuffer = "";
+  sidecarStartedAt = Date.now();
 
   const child = spawn(binary, SIDECAR_ARGS, {
     cwd: path.resolve(__dirname, "..", ".."),
@@ -221,7 +228,6 @@ function createWindow() {
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
-    sidecarRestarts = 0;
     startSidecar();
   });
 }

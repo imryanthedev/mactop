@@ -17,9 +17,8 @@ reviews:
       - do not merge
   path_filters:
     - "!**/*.toml"
-    - "!**/*.json"
+    - "!**/package-lock.json"
     - "!go.sum"
-    - "!desktop/package-lock.json"
   path_instructions:
     - path: "internal/app/**"
       instructions: |

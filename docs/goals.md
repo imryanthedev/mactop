@@ -146,7 +146,7 @@ The TUI (`gotui` in `internal/app/`) is **temporary**. It must not be deleted un
    - Configurable update interval and units
    - Settings persistence (`~/.mactop/config.json` or desktop-owned config)
    - Fan control (if kept; requires privileged SMC writes + clear warnings)
-3. **Stable bridge** — Electron no longer spawns a new process per poll; use a persistent sidecar or local HTTP/WebSocket API.
+3. **Stable bridge** — Electron no longer spawns a new process per poll; the sidecar is persistent (done), with a local HTTP/WebSocket API as the later option.
 4. **Tests green** — `go test ./internal/app/...` passes after TUI code is removed or isolated.
 5. **No default TUI path** — `app.Run()` enters desktop/sidecar mode by default, or the binary is split into `mactop-core` + desktop launcher.
 
@@ -181,7 +181,7 @@ flowchart LR
 1. **Simple view** — Prove the headless JSON bridge end-to-end.
 2. **Advanced view** — Processes, charts, fans, bandwidth.
 3. **Complex view** — Thunderbolt, sensors, full payload, settings.
-4. **Sidecar API** — Replace per-poll `spawn` with a long-lived Go process.
+4. **Sidecar API** — Replace per-poll `spawn` with a long-lived Go process (done via streaming stdout; an HTTP/WebSocket surface remains open).
 5. **Extract TUI** — Move remaining gotui code under `internal/tui/` (optional isolation step).
 6. **Delete TUI** — Remove package, dependencies, and TUI-only tests.
 

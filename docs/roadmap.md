@@ -4,7 +4,7 @@ Product direction and migration phases are defined in [goals.md](goals.md). This
 
 ## Phase 1: Simple view — **done**
 
-- [x] Headless JSON bridge (`mactop --headless` polled by Electron)
+- [x] Headless JSON bridge (`mactop --headless` streamed once, parsed per line)
 - [x] `thermal_level` field on `HeadlessOutput` for locale-safe UI styling
 - [x] Glanceable Simple view: CPU, GPU, memory, power, temperature, thermal
 - [x] 3×2 grid layout, usage gauges, thermal severity pills
@@ -36,9 +36,9 @@ Product direction and migration phases are defined in [goals.md](goals.md). This
 - [ ] Diagnostics hooks (`--dump-temps`, `--dump-debug`, `--dump-fps`)
 - [ ] Settings: update interval, units, language
 
-## Phase 4: Persistent sidecar API — **not started**
+## Phase 4: Persistent sidecar API — **in progress**
 
-- [ ] Replace per-poll `spawn` with long-lived Go process
+- [x] Replace per-poll `spawn` with long-lived Go process
 - [ ] Local HTTP or WebSocket API for metrics streaming
 - [ ] Graceful reconnect and error recovery in Electron main process
 
