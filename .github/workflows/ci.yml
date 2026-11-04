@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOCYCLO_VERSION: v0.6.0
+  INEFFASSIGN_VERSION: v0.2.0
+
+jobs:
+  go:
+    name: Go (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install lint tools
+        run: |
+          go install github.com/fzipp/gocyclo/cmd/gocyclo@${GOCYCLO_VERSION}
+          go install github.com/gordonklaus/ineffassign@${INEFFASSIGN_VERSION}
+
+      - name: Test
+        run: make test
+
+      - name: Lint
+        run: make sexy
+
+      - name: Lint must not rewrite tracked files
+        run: git diff --exit-code
+
+      - name: Build
+        run: make build
+
+  desktop:
+    name: Desktop (Node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: npm run check

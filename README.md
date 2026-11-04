@@ -11,6 +11,38 @@
 
 ![mactop](mactop.gif)
 
+## Desktop app (work in progress)
+
+This fork adds a desktop surface. It keeps the upstream metrics engine and, in
+`desktop/`, adds an Electron UI that reads the same `HeadlessOutput` JSON:
+
+```mermaid
+flowchart LR
+  app["Electron app (desktop/)"] --> main["Main process"]
+  main -->|spawns once, reads JSONL| sidecar["mactop --headless"]
+  sidecar --> collectors["SMC, IOReport, IOKit, Mach, CGO"]
+```
+
+The main process runs `mactop --headless` **once** and streams its newline
+delimited samples to the renderer, instead of polling a new process per update.
+
+| View | Status |
+| --- | --- |
+| Simple | live: CPU, GPU, memory, power, temperature, thermal state |
+| Advanced | planned: per-core usage, DRAM bandwidth, fans, network, processes |
+| Complex | planned: full payload, Thunderbolt tree, RDMA, volumes, sensors |
+
+### Development
+
+```bash
+make build                      # Go sidecar
+cd desktop && npm ci
+npm start                       # expects ../mactop, or set MACTOP_BINARY
+```
+
+The upstream terminal UI still ships unchanged; removing it is a later milestone,
+after the desktop app renders the same metrics reliably.
+
 ## Compatibility
 
 - Apple Silicon Only (ARM64)

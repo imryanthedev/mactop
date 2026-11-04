@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>mactop-desktop</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>mactop-desktop</h1>
+        <p class="subtitle">Apple Silicon metrics for macOS app developers</p>
+      </div>
+      <nav class="view-tabs" role="tablist" aria-label="Metric views">
+        <button class="tab active" data-view="simple" role="tab" aria-selected="true">
+          Simple
+        </button>
+        <button class="tab" data-view="advanced" role="tab" aria-selected="false" disabled>
+          Advanced
+        </button>
+        <button class="tab" data-view="complex" role="tab" aria-selected="false" disabled>
+          Complex
+        </button>
+      </nav>
+    </header>
+
+    <main>
+      <section id="status" class="status" hidden></section>
+
+      <section id="view-simple" class="view active simple-view" role="tabpanel">
+        <div class="summary-strip">
+          <span id="simple-chip" class="summary-chip">—</span>
+          <span id="simple-cores" class="summary-meta">—</span>
+          <span id="simple-updated" class="summary-updated">Waiting for metrics…</span>
+        </div>
+
+        <div class="simple-grid">
+          <article class="simple-card simple-card-cpu">
+            <p class="simple-label">CPU</p>
+            <p class="simple-value" id="simple-cpu-value">—</p>
+            <div class="gauge" aria-hidden="true">
+              <div class="gauge-fill" id="simple-cpu-gauge"></div>
+            </div>
+          </article>
+
+          <article class="simple-card simple-card-gpu">
+            <p class="simple-label">GPU</p>
+            <p class="simple-value" id="simple-gpu-value">—</p>
+            <div class="gauge" aria-hidden="true">
+              <div class="gauge-fill" id="simple-gpu-gauge"></div>
+            </div>
+          </article>
+
+          <article class="simple-card simple-card-memory">
+            <p class="simple-label">Memory</p>
+            <p class="simple-value" id="simple-memory-value">—</p>
+            <p class="simple-detail" id="simple-memory-detail">—</p>
+            <div class="gauge" aria-hidden="true">
+              <div class="gauge-fill" id="simple-memory-gauge"></div>
+            </div>
+          </article>
+
+          <article class="simple-card simple-card-power">
+            <p class="simple-label">Power</p>
+            <p class="simple-value" id="simple-power-value">—</p>
+            <p class="simple-detail">package</p>
+          </article>
+
+          <article class="simple-card simple-card-temp">
+            <p class="simple-label">Temperature</p>
+            <p class="simple-value" id="simple-temp-value">—</p>
+            <p class="simple-detail" id="simple-temp-detail">SoC</p>
+          </article>
+
+          <article class="simple-card simple-card-thermal">
+            <p class="simple-label">Thermal</p>
+            <span class="thermal-pill" id="simple-thermal-pill">—</span>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-advanced" class="view" role="tabpanel" hidden>
+        <div class="coming-soon">
+          <h2>Advanced view</h2>
+          <p>Coming in Phase 2 — per-core usage, DRAM bandwidth, fans, network, and process list.</p>
+        </div>
+        <div class="card-grid" hidden>
+          <article class="card wide">
+            <h2>SoC</h2>
+            <pre id="advanced-soc" class="code-block">Waiting for metrics…</pre>
+          </article>
+          <article class="card wide">
+            <h2>Network &amp; Disk</h2>
+            <pre id="advanced-io" class="code-block">Waiting for metrics…</pre>
+          </article>
+          <article class="card wide">
+            <h2>Top Processes</h2>
+            <pre id="advanced-processes" class="code-block">Waiting for metrics…</pre>
+          </article>
+        </div>
+      </section>
+
+      <section id="view-complex" class="view" role="tabpanel" hidden>
+        <div class="coming-soon">
+          <h2>Complex view</h2>
+          <p>Coming in Phase 3 — full HeadlessOutput payload, Thunderbolt tree, sensors, and diagnostics.</p>
+        </div>
+        <article class="card wide" hidden>
+          <h2>Full Headless Payload</h2>
+          <p class="hint">
+            Raw JSON from the Go sidecar. Useful while mapping Apple Silicon APIs to UI panels.
+          </p>
+          <pre id="complex-json" class="code-block">Waiting for metrics…</pre>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="renderer.js"></script>
+  </body>
+</html>
